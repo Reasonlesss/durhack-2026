@@ -1,7 +1,5 @@
 <script lang="ts">
-	import Composer from '#lib/components/Composer.svelte';
-	import TopBar from '#lib/components/TopBar.svelte';
+	import Stage from '#lib/canvas/Stage.svelte';
 </script>
 
-<TopBar />
-<Composer />
+<Stage />

@@ -3,7 +3,6 @@
  * Plain arrays, not reactive: the canvas layer reads them every animation frame.
  */
 export interface VisEvent {
-	partId: string;
 	kind: 'note' | 'effect' | 'line';
 	id: string;
 	/** AudioContext time the event becomes audible. */

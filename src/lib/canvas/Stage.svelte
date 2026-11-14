@@ -1,11 +1,12 @@
 <!--
-	The shape canvas for one part. Everything visual is painted on a <canvas> by render.ts;
+	The shape canvas. Everything visual is painted on a <canvas> by render.ts;
 	this component owns the view (pan / zoom), every gesture, and a layer of invisible but
 	focusable <button>s so each note and effect works with a keyboard and screen reader.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Hud from './Hud.svelte';
+	import Tools from './Tools.svelte';
 	import Onboarding from './Onboarding.svelte';
 	import Shelf, { type ShelfItem } from './Shelf.svelte';
 	import { ghostEffect, ghostInstrument, NOTE_STROKE_MAX } from './gestures';
@@ -29,12 +30,11 @@
 	import { songStore } from '../song.svelte';
 	import { placeAt, STARTERS } from '../starters';
 	import { preview, transport } from '../transport.svelte';
-	import { FEEL_COLOURS, type Effect, type Instrument, type Line, type Note, type Part } from '../types';
+	import { FEEL_COLOURS, type Effect, type Instrument, type Line, type Note } from '../types';
 	import { uid } from '../ids';
 	import { vis } from '../vis';
 	import { ui } from '../ui.svelte';
 
-	let { part }: { part: Part } = $props();
 
 	let stage: HTMLElement;
 	let cnv: HTMLCanvasElement;
@@ -44,9 +44,9 @@
 	let view = $state<View>({ x: 0, y: 0, k: 1 });
 	let lastInst: Instrument = 'lead';
 
-	const canvas = $derived(part.canvas);
+	const canvas = $derived(songStore.song.canvas);
 	const accent = $derived(FEEL_COLOURS[songStore.song.harmony.feel]);
-	const graph = () => graphOf(part.canvas, songStore.version);
+	const graph = () => graphOf(songStore.song.canvas, songStore.version);
 
 	// ---- readout chip ------------------------------------------------------------------
 	let readout = $state<{ text: string; x: number; y: number; key: number } | null>(null);
@@ -252,12 +252,12 @@
 				const n = gesture.note;
 				if (gesture.zone === 'body') {
 					liftId = n.id;
-					songStore.updateNote(part.id, n.id, { x: wx - gesture.off[0], y: wy - gesture.off[1] }, gestureId);
+					songStore.updateNote(n.id, { x: wx - gesture.off[0], y: wy - gesture.off[1] }, gestureId);
 					const row = rowOf(n.y);
 					dragRow = row;
 					if (row !== gesture.row) {
 						gesture.row = row;
-						preview(part.id, n, true);
+						preview(n, true);
 					}
 					sayNote(n);
 				} else {
@@ -276,13 +276,13 @@
 			}
 			case 'effect':
 				if (!moved) break;
-				songStore.updateEffect(part.id, gesture.effect.id, { x: wx - gesture.off[0], y: wy - gesture.off[1] }, gestureId);
+				songStore.updateEffect(gesture.effect.id, { x: wx - gesture.off[0], y: wy - gesture.off[1] }, gestureId);
 				sayEffect(gesture.effect);
 				break;
 			case 'handle': {
 				const ef = gesture.effect;
 				const rot = (Math.atan2(wy - ef.y, wx - ef.x) * 180) / Math.PI + 90;
-				songStore.updateEffect(part.id, ef.id, { rot }, gestureId);
+				songStore.updateEffect(ef.id, { rot }, gestureId);
 				sayEffect(ef);
 				break;
 			}
@@ -318,32 +318,30 @@
 			case 'note': {
 				const n = g.note;
 				if (!moved) {
-					songStore.cycleInstrument(part.id, n.id);
+					songStore.cycleInstrument(n.id);
 					lastInst = n.inst;
-					preview(part.id, n);
+					preview(n);
 					sayNote(n);
 				} else if (g.zone === 'body') {
-					if (isOverShelf(e)) songStore.removeNote(part.id, n.id);
-					else songStore.updateNote(part.id, n.id, { y: yOfRow(rowOf(n.y)) }, gestureId);
+					if (isOverShelf(e)) songStore.removeNote(n.id);
+					else songStore.updateNote(n.id, { y: yOfRow(rowOf(n.y)) }, gestureId);
 				} else if (chainDraft?.snap) {
-					songStore.toggleLine(part.id, n.id, chainDraft.snap.id);
+					songStore.toggleLine(n.id, chainDraft.snap.id);
 				} else {
 					const [nx, ny] = toScreen(view, n.x, n.y);
 					if (Math.hypot(p[0] - nx, p[1] - ny) > 40) {
-						const id = songStore.addNote(part.id, { inst: n.inst, x: wx, y: wy, size: n.size, rot: n.rot }, n.id);
-						const made = canvas.notes.find((x) => x.id === id);
-						if (made) preview(part.id, made);
+						preview(songStore.addNote({ inst: n.inst, x: wx, y: wy, size: n.size, rot: n.rot }, n.id));
 					}
 				}
 				break;
 			}
 			case 'effect':
-				if (moved && isOverShelf(e)) songStore.removeEffect(part.id, g.effect.id);
+				if (moved && isOverShelf(e)) songStore.removeEffect(g.effect.id);
 				else sayEffect(g.effect);
 				break;
 			case 'line':
 				if (!moved) {
-					songStore.stepLine(part.id, g.line.id, e.shiftKey);
+					songStore.stepLine(g.line.id, e.shiftKey);
 					const [x, y] = p;
 					say(lineWords(g.line.div), x, y, 8);
 				}
@@ -370,13 +368,10 @@
 	}
 
 	function placeNote(wx: number, wy: number) {
-		const id = songStore.addNote(part.id, { inst: lastInst, x: wx, y: wy, size: 22, rot: 60 });
-		const n = canvas.notes.find((x) => x.id === id);
-		if (n) {
-			preview(part.id, n);
-			sayNote(n);
-		}
-		if (!transport.everPlayed) transport.play(part.id);
+		const n = songStore.addNote({ inst: lastInst, x: wx, y: wy, size: 22, rot: 60 });
+		preview(n);
+		sayNote(n);
+		if (!transport.everPlayed) transport.play();
 	}
 
 	function finishStroke(pts: [number, number][]) {
@@ -384,31 +379,27 @@
 		if (!r) return; // open strokes do nothing
 		if (r.r * 2 < NOTE_STROKE_MAX) {
 			lastInst = ghostInstrument(r);
-			const id = songStore.addNote(part.id, { inst: lastInst, x: r.cx, y: r.cy, size: Math.max(8, Math.min(40, r.r * 1.6)), rot: 60 });
-			const n = canvas.notes.find((x) => x.id === id);
-			if (n) (preview(part.id, n), sayNote(n));
+			const n = songStore.addNote({ inst: lastInst, x: r.cx, y: r.cy, size: Math.max(8, Math.min(40, r.r * 1.6)), rot: 60 });
+			preview(n);
+			sayNote(n);
 		} else {
 			const { id: _, ...e } = ghostEffect(r);
-			const id = songStore.addEffect(part.id, e);
-			const made = canvas.effects.find((x) => x.id === id);
-			if (made) sayEffect(made);
+			sayEffect(songStore.addEffect(e));
 		}
 	}
 
 	function dropFromShelf(item: ShelfItem, wx: number, wy: number) {
 		if (item.kind === 'instrument') {
 			lastInst = item.id;
-			const id = songStore.addNote(part.id, { inst: item.id, x: wx, y: wy, size: 22, rot: 60 });
-			const n = canvas.notes.find((x) => x.id === id);
-			if (n) (preview(part.id, n), sayNote(n));
+			const n = songStore.addNote({ inst: item.id, x: wx, y: wy, size: 22, rot: 60 });
+			preview(n);
+			sayNote(n);
 		} else if (item.kind === 'effect') {
-			const id = songStore.addEffect(part.id, { kind: item.id, x: wx, y: wy, r: 150, rot: 0 });
-			const made = canvas.effects.find((x) => x.id === id);
-			if (made) sayEffect(made);
+			sayEffect(songStore.addEffect({ kind: item.id, x: wx, y: wy, r: 150, rot: 0 }));
 		} else {
-			songStore.addGroup(part.id, placeAt(STARTERS[item.id](), wx, wy));
+			songStore.addGroup(placeAt(STARTERS[item.id](), wx, wy));
 			if (item.id === 'a rave' && songStore.song.bpm < 140) songStore.setBpm(140);
-			if (!transport.isPlaying) transport.play(part.id);
+			if (!transport.isPlaying) transport.play();
 		}
 		interacted();
 	}
@@ -438,10 +429,10 @@
 		const scale = g.d / p.d;
 		const turn = ((g.a - p.a) * 180) / Math.PI;
 		if (gesture?.kind === 'note' && p.size !== undefined) {
-			songStore.updateNote(part.id, gesture.note.id, { size: p.size * scale, rot: p.rot! + turn }, gestureId);
+			songStore.updateNote(gesture.note.id, { size: p.size * scale, rot: p.rot! + turn }, gestureId);
 			sayNote(gesture.note);
 		} else if (gesture?.kind === 'effect' && p.r !== undefined) {
-			songStore.updateEffect(part.id, gesture.effect.id, { r: p.r * scale, rot: p.rot! + turn }, gestureId);
+			songStore.updateEffect(gesture.effect.id, { r: p.r * scale, rot: p.rot! + turn }, gestureId);
 			sayEffect(gesture.effect);
 		} else {
 			// Pan and zoom the view, keeping the pinched world point under the fingers.
@@ -474,10 +465,10 @@
 		const note = hit.kind === 'note' ? hit.note : null;
 		const effect = hit.kind === 'effect' || hit.kind === 'handle' ? hit.effect : canvas.effects.find((x) => strengthAt(x, effectPolygon(x), wx, wy) > 0);
 		if (note && !e.ctrlKey) {
-			songStore.updateNote(part.id, note.id, turning ? { rot: note.rot + delta * 0.6 } : { size: note.size - delta * 0.05 }, `wheel:${note.id}`);
+			songStore.updateNote(note.id, turning ? { rot: note.rot + delta * 0.6 } : { size: note.size - delta * 0.05 }, `wheel:${note.id}`);
 			sayNote(note);
 		} else if (effect && !e.ctrlKey) {
-			songStore.updateEffect(part.id, effect.id, turning ? { rot: effect.rot + delta * 0.4 } : { r: effect.r - delta * 0.6 }, `wheel:${effect.id}`);
+			songStore.updateEffect(effect.id, turning ? { rot: effect.rot + delta * 0.4 } : { r: effect.r - delta * 0.6 }, `wheel:${effect.id}`);
 			sayEffect(effect);
 		} else if (e.ctrlKey) {
 			const k = Math.max(0.25, Math.min(4, view.k * Math.exp(-e.deltaY * 0.01)));
@@ -497,12 +488,12 @@
 		};
 		if (moves[e.key]) {
 			e.preventDefault();
-			songStore.updateNote(part.id, n.id, moves[e.key], `key:${n.id}`);
-			if (e.key === 'ArrowUp' || e.key === 'ArrowDown') preview(part.id, n, true);
+			songStore.updateNote(n.id, moves[e.key], `key:${n.id}`);
+			if (e.key === 'ArrowUp' || e.key === 'ArrowDown') preview(n, true);
 			sayNote(n);
 		} else if (e.key === 'Delete' || e.key === 'Backspace') {
 			e.preventDefault();
-			songStore.removeNote(part.id, n.id);
+			songStore.removeNote(n.id);
 		}
 	}
 	function effectKey(ef: Effect, e: KeyboardEvent) {
@@ -514,11 +505,11 @@
 		};
 		if (moves[e.key]) {
 			e.preventDefault();
-			songStore.updateEffect(part.id, ef.id, moves[e.key], `key:${ef.id}`);
+			songStore.updateEffect(ef.id, moves[e.key], `key:${ef.id}`);
 			sayEffect(ef);
 		} else if (e.key === 'Delete' || e.key === 'Backspace') {
 			e.preventDefault();
-			songStore.removeEffect(part.id, ef.id);
+			songStore.removeEffect(ef.id);
 		}
 	}
 
@@ -536,14 +527,14 @@
 			g.setTransform(dpr, 0, 0, dpr, 0, 0);
 			const ctx = audio();
 			draw(g, {
-				canvas: part.canvas,
+				canvas: songStore.song.canvas,
 				graph: graph(),
 				view,
 				width,
 				height,
 				accent,
 				now: ctx.state === 'running' ? ctx.currentTime : -1,
-				events: vis.events.filter((v) => v.partId === part.id),
+				events: vis.events,
 				hoverId,
 				liftId,
 				dragRow,
@@ -574,7 +565,7 @@
 	bind:clientHeight={height}
 	style="cursor: {cursor}"
 	role="application"
-	aria-label="Shape canvas for {part.name}. Tap to place a note."
+	aria-label="Shape canvas. Tap to place a note."
 	onpointerdown={down}
 	onpointermove={move}
 	onpointerup={up}
@@ -594,8 +585,8 @@
 				tabindex="0"
 				onclick={(e) => {
 					if (e.detail !== 0) return; // pointer taps are handled by the stage
-					songStore.cycleInstrument(part.id, n.id);
-					preview(part.id, n);
+					songStore.cycleInstrument(n.id);
+					preview(n);
 					sayNote(n);
 				}}
 				onkeydown={(e) => noteKey(n, e)}
@@ -626,9 +617,9 @@
 		}} />
 	</div>
 
-	<div class="hud" data-chrome><Hud partId={part.id} /></div>
+	<div class="hud" data-chrome><Hud /></div>
 
-	<a class="back" href="/" data-chrome>← the whole song · {part.name.toLowerCase()}</a>
+	<div class="tools" data-chrome><Tools /></div>
 
 	{#if readout}
 		{#key readout.key}
@@ -705,24 +696,10 @@
 		top: 8px;
 		right: 12px;
 	}
-	.back {
+	.tools {
 		position: absolute;
-		left: 18px;
-		bottom: 10px;
-		font: 12px var(--mono);
-		color: var(--muted);
-		text-decoration: none;
-		min-height: 44px;
-		display: flex;
-		align-items: center;
-		padding: 0 6px;
-		border-radius: var(--r-sm);
-	}
-	.back:hover {
-		color: var(--text);
-	}
-	.back:focus-visible {
-		outline: 2px solid var(--accent);
+		left: 12px;
+		bottom: 8px;
 	}
 	.readout {
 		position: absolute;

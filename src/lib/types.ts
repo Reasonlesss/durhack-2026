@@ -8,41 +8,6 @@ export interface Harmony {
 	chord: Chord;
 }
 
-/** One shape-sequencer canvas: a self-contained looping pattern. */
-export interface Part {
-	id: string;
-	name: string;
-	colour: string;
-	bars: number;
-	muted: boolean;
-	solo: boolean;
-	/** The shape canvas: notes, the lines that chain them, and effect outlines. */
-	canvas: Canvas;
-}
-
-/** A slice of the song timeline (Intro, Verse, ...). No harmony = inherit song default. */
-export interface Section {
-	id: string;
-	name: string;
-	bars: number;
-	harmony?: Harmony;
-}
-
-export interface Song {
-	id: string;
-	name: string;
-	bpm: number;
-	harmony: Harmony;
-	parts: Part[];
-	sections: Section[];
-	/** Key `${partId}:${sectionId}`; missing = off. */
-	cells: Record<string, boolean>;
-	/** How late off-beats land: tight (none), loose, lazy. */
-	swing: 'tight' | 'loose' | 'lazy';
-	/** Inclusive section range to loop over; unset = whole song. */
-	loop?: { from: string; to: string };
-}
-
 export type Instrument = 'lead' | 'chords' | 'bells' | 'bass' | 'drums' | 'stab' | 'acid' | 'siren' | 'pause';
 export type EffectKind = 'dreamy' | 'echo' | 'muffle' | 'crunch' | 'distortion';
 
@@ -86,6 +51,16 @@ export interface Canvas {
 
 export const emptyCanvas = (): Canvas => ({ notes: [], lines: [], effects: [] });
 
+export interface Song {
+	id: string;
+	name: string;
+	bpm: number;
+	harmony: Harmony;
+	/** How late off-beats land: tight (none), loose, lazy. */
+	swing: 'tight' | 'loose' | 'lazy';
+	canvas: Canvas;
+}
+
 export const FEELS: Feel[] = ['spooky', 'moody', 'mellow', 'sunny', 'dreamy'];
 /** Bottom → top in the harmony pad. */
 export const CHORDS: Chord[] = ['home', 'drift', 'lift', 'reach'];
@@ -98,8 +73,4 @@ export const FEEL_COLOURS: Record<Feel, string> = {
 	dreamy: '#C9A2FF'
 };
 
-export const PART_COLOURS = ['#7EE0A1', '#7CA7FF', '#6FD6C4', '#F2B544', '#C9A2FF', '#FF9B85', '#E8E07A'];
-
 export const BEATS_PER_BAR = 4;
-
-export const cellKey = (partId: string, sectionId: string) => `${partId}:${sectionId}`;

@@ -4,8 +4,6 @@
 	import Heartbeat from '../components/Heartbeat.svelte';
 	import { songStore } from '../song.svelte';
 
-	let { partId }: { partId: string } = $props();
-
 	const SWINGS = ['tight', 'loose', 'lazy'] as const;
 	const swing = $derived(songStore.song.swing ?? 'tight');
 
@@ -17,7 +15,7 @@
 			undoUntil = 0;
 			return;
 		}
-		songStore.clearCanvas(partId);
+		songStore.clearCanvas();
 		undoUntil = Date.now() + 6000;
 		clearTimeout(timer);
 		timer = setTimeout(() => (undoUntil = 0), 6000);
@@ -26,7 +24,7 @@
 
 <div class="hud">
 	<HarmonyChip align="right" />
-	<Heartbeat {partId} />
+	<Heartbeat />
 	<button
 		class="word"
 		aria-label="Groove: {swing}. Press to change."

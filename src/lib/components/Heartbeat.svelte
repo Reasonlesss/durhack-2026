@@ -1,17 +1,15 @@
 <!-- Tempo + play. Tap = play/stop, drag up/down = faster/slower, scroll = nudge.
      Breathes slowly when stopped, pulses on every beat when playing, and shows an invite
-     ring until the very first play. With a partId it plays that part; otherwise the song. -->
+     ring until the very first play. -->
 <script lang="ts">
 	import { paceWord } from '#lib/music.ts';
 	import { songStore } from '#lib/song.svelte.ts';
 	import { transport } from '#lib/transport.svelte.ts';
 	import { onMount } from 'svelte';
 
-	let { partId }: { partId?: string } = $props();
-
 	const bpm = $derived(songStore.song.bpm);
 	const word = $derived(paceWord(bpm));
-	const playingHere = $derived(transport.isPlaying && (partId ? transport.mode.kind === 'part' && transport.mode.partId === partId : transport.mode.kind === 'song'));
+	const playingHere = $derived(transport.isPlaying);
 
 	let btn: HTMLButtonElement;
 	let start: { y: number; bpm: number } | null = null;
@@ -19,7 +17,7 @@
 	let showWord = $state(false);
 	let wordTimer: ReturnType<typeof setTimeout> | undefined;
 
-	const toggle = () => (playingHere ? transport.stop() : transport.play(partId));
+	const toggle = () => transport.toggle();
 	function flashWord() {
 		showWord = true;
 		clearTimeout(wordTimer);
@@ -77,7 +75,7 @@
 		onclick={(e) => e.detail === 0 && toggle()}
 	>
 		{#if !transport.everPlayed}<span class="invite" aria-hidden="true"></span>{/if}
-		{#key playingHere ? Math.floor(transport.songBeat) : -1}
+		{#key playingHere ? Math.floor(transport.beat) : -1}
 			<span class="ring" class:live={playingHere} style="--period: {60 / bpm}s"><span class="core"></span></span>
 		{/key}
 	</button>
