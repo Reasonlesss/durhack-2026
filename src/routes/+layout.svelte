@@ -6,10 +6,28 @@
 	import { songStore } from '#lib/song.svelte.ts';
 	import { transport } from '#lib/transport.svelte.ts';
 	import { FEEL_COLOURS } from '#lib/types.ts';
+	import { FEEL_GROUND } from '#lib/music.ts';
+	import { songFromHash } from '#lib/share.ts';
+	import { onMount } from 'svelte';
 	import { ui } from '#lib/ui.svelte.ts';
 
 	let { children } = $props();
 
+	// A shared link (#song=...) replaces the current song (undoable), then the hash is cleared.
+	onMount(async () => {
+		try {
+			const shared = await songFromHash();
+			if (shared) songStore.replaceSong(shared as never);
+		} catch {
+			/* broken link: keep the current song */
+		}
+		if (location.hash) history.replaceState(null, '', location.pathname);
+	});
+
+	// Dev only: poke at the live stores from the browser console.
+	if (import.meta.env.DEV) Object.assign(window, { __shape: { songStore, transport } });
+
+	const onCanvas = () => page.route.id === '/part/[id]';
 	const isTyping = (t: EventTarget | null) =>
 		t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
 
@@ -32,7 +50,8 @@
 			else ui.selection = null;
 			return;
 		}
-		if (isTyping(e.target)) return;
+		// The shape canvas has no global shortcuts (its notes handle their own keys).
+		if (isTyping(e.target) || onCanvas()) return;
 		if (e.key === ' ') {
 			e.preventDefault();
 			transport.toggle();
@@ -49,7 +68,10 @@
 
 <svelte:window onkeydown={keydown} />
 
-<div class="app" style="--accent: {FEEL_COLOURS[songStore.song.harmony.feel]}">
+<div
+	class="app"
+	style="--accent: {FEEL_COLOURS[songStore.song.harmony.feel]}; background: {FEEL_GROUND[songStore.song.harmony.feel]}"
+>
 	{@render children()}
 </div>
 
@@ -59,6 +81,6 @@
 		height: 100dvh;
 		display: flex;
 		flex-direction: column;
-		transition: --accent var(--t);
+		transition: background-color 0.6s ease;
 	}
 </style>

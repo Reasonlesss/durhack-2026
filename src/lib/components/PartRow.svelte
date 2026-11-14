@@ -11,6 +11,14 @@
 	let { part, index, firstCell }: { part: Part; index: number; firstCell: boolean } = $props();
 
 	const DRAG_TYPE = 'text/x-part-index';
+	const thumbBox = $derived.by(() => {
+		const ns = part.canvas.notes;
+		if (!ns.length) return '0 0 1440 900';
+		const xs = ns.map((n) => n.x);
+		const ys = ns.map((n) => n.y);
+		const [x0, y0] = [Math.min(...xs) - 60, Math.min(...ys) - 60];
+		return `${x0} ${y0} ${Math.max(...xs) - x0 + 60} ${Math.max(...ys) - y0 + 60}`;
+	});
 	let dropTarget = $state(false);
 	const selected = $derived(ui.selection?.kind === 'part' && ui.selection.partId === part.id);
 
@@ -65,8 +73,10 @@
 		</button>
 		<span class="swatch" style="background: {part.colour}" aria-hidden="true"></span>
 		<a class="name" href="/part/{part.id}" title="Open {part.name}">{part.name}</a>
-		<!-- Placeholder: the note system will draw a mini picture of the part's shapes here. -->
-		<span class="thumb" style="--c: {part.colour}" title="A preview appears here once the part has notes" aria-hidden="true"></span>
+		<!-- Mini picture of the part's shapes. -->
+		<svg class="thumb" viewBox={thumbBox} aria-hidden="true">
+			{#each part.canvas.notes as n (n.id)}<circle cx={n.x} cy={n.y} r={Math.max(14, n.size)} fill={part.colour} opacity={n.inst === 'pause' ? 0.3 : 0.9} />{/each}
+		</svg>
 		<button class="icon" aria-label="Silence {part.name}" aria-pressed={part.muted} title="Silence" onclick={() => songStore.toggleMute(part.id)}>
 			<Icon name={part.muted ? 'mute' : 'sound'} size={16} />
 		</button>
@@ -153,7 +163,7 @@
 		height: 22px;
 		flex: none;
 		border-radius: 5px;
-		border: 1px dashed color-mix(in srgb, var(--c) 55%, transparent);
+		border: 1px solid var(--line);
 		margin-right: 4px;
 	}
 	.icon[aria-pressed='true'] {

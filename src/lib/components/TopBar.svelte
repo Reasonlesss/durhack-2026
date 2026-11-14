@@ -4,10 +4,19 @@
 	import Heartbeat from './Heartbeat.svelte';
 	import Icon from './Icon.svelte';
 	import { exportSong, importSong, songStore } from '#lib/song.svelte.ts';
+	import { songLink } from '#lib/share.ts';
 	import { transport } from '#lib/transport.svelte.ts';
 
 	let fileInput: HTMLInputElement;
 	let error = $state('');
+	let copied = $state(false);
+
+	async function share() {
+		const link = await songLink(songStore.song);
+		await navigator.clipboard.writeText(link).catch(() => prompt('Copy this link', link));
+		copied = true;
+		setTimeout(() => (copied = false), 1800);
+	}
 
 	async function onFile() {
 		const file = fileInput.files?.[0];
@@ -31,7 +40,7 @@
 	/>
 
 	<div class="group">
-		<button class="icon play" aria-label={transport.isPlaying ? 'Stop' : 'Play'} onclick={transport.toggle}>
+		<button class="icon play" aria-label={transport.isPlaying ? 'Stop' : 'Play'} onclick={() => transport.toggle()}>
 			<Icon name={transport.isPlaying ? 'stop' : 'play'} size={20} />
 		</button>
 		<Heartbeat />
@@ -57,6 +66,9 @@
 		</button>
 		<button class="icon" aria-label="Save song to a file" title="Save to a file" onclick={exportSong}>
 			<Icon name="export" />
+		</button>
+		<button class="icon" aria-label={copied ? 'Link copied' : 'Copy a link to this song'} title={copied ? 'link copied' : 'copy a link to share'} onclick={share}>
+			<Icon name={copied ? 'check' : 'link'} />
 		</button>
 		<button class="icon" aria-label="Open a song file" title="Open a file" onclick={() => fileInput.click()}>
 			<Icon name="import" />

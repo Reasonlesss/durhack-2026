@@ -1,6 +1,20 @@
 import { uid } from './ids';
 import { demoSong } from './seed';
-import { BEATS_PER_BAR, PART_COLOURS, cellKey, type Harmony, type Part, type Section, type Song } from './types';
+import { nextInstrument, rowOf, yOfRow } from './music';
+import {
+	BEATS_PER_BAR,
+	PART_COLOURS,
+	cellKey,
+	emptyCanvas,
+	type Canvas,
+	type Effect,
+	type Harmony,
+	type Line,
+	type Note,
+	type Part,
+	type Section,
+	type Song
+} from './types';
 
 const STORAGE_KEY = 'shape-sequencer:song';
 const HISTORY_LIMIT = 200;
@@ -26,8 +40,12 @@ export function validate(data: unknown): Song {
 	if (!s || typeof s !== 'object' || !Array.isArray(s.parts) || !Array.isArray(s.sections) || !s.harmony)
 		throw new Error('That file is not a Shape Sequencer song.');
 	s.cells ??= {};
-	s.bpm = Math.max(40, Math.min(220, Number(s.bpm) || 100));
-	s.parts.forEach((p) => (p.canvas = null));
+	s.bpm = Math.max(50, Math.min(200, Number(s.bpm) || 100));
+	for (const p of s.parts) {
+		const c = (p.canvas ?? {}) as Partial<Canvas>;
+		p.canvas = { notes: c.notes ?? [], lines: c.lines ?? [], effects: c.effects ?? [] };
+	}
+	s.swing ??= 'tight';
 	return s;
 }
 
@@ -39,6 +57,8 @@ class SongStore {
 	canRedo = $state(false);
 	private lastKey: string | null = null;
 	private lastTime = 0;
+	/** Bumped on every change; lets caches (the chain graph) know when to rebuild. Not reactive. */
+	version = 0;
 
 	/** Parts that actually sound in each section, honouring mute and solo. */
 	activeParts = $derived.by(() => {
@@ -82,6 +102,7 @@ class SongStore {
 		this.lastKey = coalesceKey ?? null;
 		this.lastTime = now;
 		fn(this.song);
+		this.version++;
 		this.syncFlags();
 	}
 
@@ -93,6 +114,7 @@ class SongStore {
 		if (!snap) return;
 		to.push(JSON.stringify(this.song));
 		this.song = JSON.parse(snap);
+		this.version++;
 		this.lastKey = null;
 		this.syncFlags();
 	}
@@ -113,7 +135,7 @@ class SongStore {
 
 	renameSong = (name: string) => this.commit((s) => (s.name = name), 'song-name');
 	setBpm = (bpm: number) =>
-		this.commit((s) => (s.bpm = Math.max(40, Math.min(220, Math.round(bpm)))), 'bpm');
+		this.commit((s) => (s.bpm = Math.max(50, Math.min(200, Math.round(bpm)))), 'bpm');
 	/** Section id given = override for that section; null harmony clears the override. */
 	setHarmony = (harmony: Harmony | null, sectionId?: string) =>
 		this.commit((s) => {
@@ -136,6 +158,7 @@ class SongStore {
 		const fresh = validate(clone(next));
 		this.commit(() => {}); // snapshot the current song so the import can be undone
 		this.song = fresh;
+		this.version++;
 	};
 
 	// ---- parts -----------------------------------------------------------
@@ -150,7 +173,7 @@ class SongStore {
 				bars: 1,
 				muted: false,
 				solo: false,
-				canvas: null
+				canvas: emptyCanvas()
 			})
 		);
 		return id;
@@ -225,6 +248,91 @@ class SongStore {
 			}
 		});
 
+	// ---- canvas (one part's shapes) -----------------------------------------------
+
+	/** Run a mutation on a part's canvas as one undoable step. */
+	private canvasEdit(partId: string, fn: (c: Canvas) => void, key?: string) {
+		this.commit((s) => {
+			const p = s.parts.find((x) => x.id === partId);
+			if (p) fn(p.canvas);
+		}, key);
+	}
+
+	addNote = (partId: string, n: Omit<Note, 'id'>, connectFrom?: string) => {
+		const id = uid('n_');
+		this.canvasEdit(partId, (c) => {
+			c.notes.push({ ...n, id, y: yOfRow(rowOf(n.y)) });
+			if (connectFrom) c.lines.push({ id: uid('l_'), from: connectFrom, to: id, div: 1 });
+		});
+		return id;
+	};
+	/** Move / resize / turn a note. Pass a gesture id so a whole drag is one undo step. */
+	updateNote = (partId: string, id: string, patch: Partial<Note>, gesture?: string) =>
+		this.canvasEdit(partId, (c) => {
+			const n = c.notes.find((x) => x.id === id);
+			if (n) Object.assign(n, clampNote({ ...n, ...patch }));
+		}, gesture);
+	cycleInstrument = (partId: string, id: string) =>
+		this.canvasEdit(partId, (c) => {
+			const n = c.notes.find((x) => x.id === id);
+			if (n) n.inst = nextInstrument(n.inst);
+		});
+	setInstrument = (partId: string, id: string, inst: Note['inst']) =>
+		this.canvasEdit(partId, (c) => {
+			const n = c.notes.find((x) => x.id === id);
+			if (n) n.inst = inst;
+		});
+	removeNote = (partId: string, id: string) =>
+		this.canvasEdit(partId, (c) => {
+			c.notes = c.notes.filter((n) => n.id !== id);
+			c.lines = c.lines.filter((l) => l.from !== id && l.to !== id);
+		});
+	/** Draw a line A→B; drawing the same pair again removes it. Returns true if a line now exists. */
+	toggleLine = (partId: string, from: string, to: string) => {
+		let made = false;
+		this.canvasEdit(partId, (c) => {
+			const i = c.lines.findIndex((l) => (l.from === from && l.to === to) || (l.from === to && l.to === from));
+			if (i >= 0) c.lines.splice(i, 1);
+			else {
+				c.lines.push({ id: uid('l_'), from, to, div: 1 });
+				made = true;
+			}
+		});
+		return made;
+	};
+	/** Split a line into more pieces (1→2→3→4→1), or back with `back`. */
+	stepLine = (partId: string, id: string, back = false) =>
+		this.canvasEdit(partId, (c) => {
+			const l = c.lines.find((x) => x.id === id);
+			if (l) l.div = ((((l.div - 1 + (back ? -1 : 1)) % 4) + 4) % 4 + 1) as Line['div'];
+		});
+	addEffect = (partId: string, e: Omit<Effect, 'id'>) => {
+		const id = uid('e_');
+		this.canvasEdit(partId, (c) => c.effects.push({ ...e, id, r: clamp(e.r, 50, 320) }));
+		return id;
+	};
+	updateEffect = (partId: string, id: string, patch: Partial<Effect>, gesture?: string) =>
+		this.canvasEdit(partId, (c) => {
+			const e = c.effects.find((x) => x.id === id);
+			if (e) Object.assign(e, patch, { r: clamp(patch.r ?? e.r, 50, 320), rot: wrap(patch.rot ?? e.rot) });
+		}, gesture);
+	removeEffect = (partId: string, id: string) =>
+		this.canvasEdit(partId, (c) => (c.effects = c.effects.filter((e) => e.id !== id)));
+	clearCanvas = (partId: string) => this.canvasEdit(partId, (c) => Object.assign(c, emptyCanvas()));
+	/** Drop in a ready-made group (starters); ids are made fresh. */
+	addGroup = (partId: string, group: Canvas) => {
+		const map = new Map<string, string>();
+		this.canvasEdit(partId, (c) => {
+			for (const n of group.notes) {
+				map.set(n.id, uid('n_'));
+				c.notes.push({ ...n, id: map.get(n.id)!, y: yOfRow(rowOf(n.y)) });
+			}
+			for (const l of group.lines) c.lines.push({ ...l, id: uid('l_'), from: map.get(l.from)!, to: map.get(l.to)! });
+			for (const e of group.effects) c.effects.push({ ...e, id: uid('e_') });
+		});
+	};
+	setSwing = (swing: Song['swing']) => this.commit((s) => (s.swing = swing));
+
 	// ---- cells -----------------------------------------------------------
 
 	toggleCell = (partId: string, sectionId: string) =>
@@ -233,6 +341,12 @@ class SongStore {
 	/** Set many cells at once. Pass the same stroke id for one drag so it undoes in one go. */
 	paintCells = (keys: { partId: string; sectionId: string }[], value: boolean, strokeId?: string) =>
 		this.commit((s) => keys.forEach((k) => setCell(s, k.partId, k.sectionId, value)), strokeId);
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+const wrap = (deg: number) => ((deg % 360) + 360) % 360;
+function clampNote(n: Note): Note {
+	return { ...n, size: clamp(n.size, 8, 40), rot: wrap(n.rot) };
 }
 
 function withPart(s: Song, id: string, fn: (p: Part) => void) {

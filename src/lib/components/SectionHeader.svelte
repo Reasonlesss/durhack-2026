@@ -34,7 +34,7 @@
 	class:drop={dropTarget}
 	style="grid-column: {index + 2}"
 	role="group"
-	aria-label="{section.name}, {section.bars} bars"
+	aria-label={section.name}
 	onfocusin={(e) => {
 		if (!(e.target as HTMLElement).closest('[role=dialog]')) ui.selection = { kind: 'section', sectionId: section.id };
 	}}
@@ -84,7 +84,8 @@
 			<button class="icon" aria-label="Shorter" disabled={section.bars <= 1} onclick={() => songStore.setSectionBars(section.id, section.bars - 1)}>
 				<Icon name="minus" size={14} />
 			</button>
-			<span class="bars" aria-live="polite">{section.bars}<small> bars</small></span>
+			<!-- Length as little ticks rather than a number. -->
+			<span class="bars" aria-hidden="true">{#each Array(Math.min(section.bars, 16)) as _}<i></i>{/each}</span>
 			<button class="icon" aria-label="Longer" onclick={() => songStore.setSectionBars(section.id, section.bars + 1)}>
 				<Icon name="plus" size={14} />
 			</button>
@@ -151,13 +152,16 @@
 		width: 32px;
 	}
 	.bars {
-		font-family: var(--mono);
-		font-size: 13px;
-		min-width: 3.4em;
-		text-align: center;
+		display: flex;
+		gap: 2px;
+		align-items: center;
+		min-width: 1.5em;
 	}
-	.bars small {
-		color: var(--muted);
-		font-size: 11px;
+	.bars i {
+		width: 3px;
+		height: 10px;
+		border-radius: 1px;
+		background: var(--muted);
+		opacity: 0.6;
 	}
 </style>

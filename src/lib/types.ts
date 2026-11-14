@@ -16,8 +16,8 @@ export interface Part {
 	bars: number;
 	muted: boolean;
 	solo: boolean;
-	/* Reserved for the note/shape system. Always null until that lands. */
-	canvas: null;
+	/** The shape canvas: notes, the lines that chain them, and effect outlines. */
+	canvas: Canvas;
 }
 
 /** A slice of the song timeline (Intro, Verse, ...). No harmony = inherit song default. */
@@ -37,9 +37,54 @@ export interface Song {
 	sections: Section[];
 	/** Key `${partId}:${sectionId}`; missing = off. */
 	cells: Record<string, boolean>;
+	/** How late off-beats land: tight (none), loose, lazy. */
+	swing: 'tight' | 'loose' | 'lazy';
 	/** Inclusive section range to loop over; unset = whole song. */
 	loop?: { from: string; to: string };
 }
+
+export type Instrument = 'lead' | 'chords' | 'bells' | 'bass' | 'drums' | 'stab' | 'acid' | 'siren' | 'pause';
+export type EffectKind = 'dreamy' | 'echo' | 'muffle' | 'crunch' | 'distortion';
+
+/** One shape on the canvas. Height = pitch, size = loudness, rotation = how long it rings. */
+export interface Note {
+	id: string;
+	inst: Instrument;
+	/** World coordinates (the canvas is infinite; pitch rows are measured from ROW0_Y). */
+	x: number;
+	y: number;
+	/** 8–40 */
+	size: number;
+	/** 0–360 */
+	rot: number;
+}
+
+/** Directed: after `from` plays, `to` plays. `div` splits the one-beat step into 1–4 pieces. */
+export interface Line {
+	id: string;
+	from: string;
+	to: string;
+	div: 1 | 2 | 3 | 4;
+}
+
+/** A large outline; notes inside are processed by it. */
+export interface Effect {
+	id: string;
+	kind: EffectKind;
+	x: number;
+	y: number;
+	/** Radius 50–320 */
+	r: number;
+	rot: number;
+}
+
+export interface Canvas {
+	notes: Note[];
+	lines: Line[];
+	effects: Effect[];
+}
+
+export const emptyCanvas = (): Canvas => ({ notes: [], lines: [], effects: [] });
 
 export const FEELS: Feel[] = ['spooky', 'moody', 'mellow', 'sunny', 'dreamy'];
 /** Bottom → top in the harmony pad. */

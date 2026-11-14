@@ -15,7 +15,9 @@ export const ICONS = {
 	back: ['M19 12H5', 'M11 6l-6 6 6 6'],
 	click: ['M8 20h8L13 4h-2z', 'M12 14l5-6'],
 	close: ['M6 6l12 12', 'M18 6L6 18'],
-	minus: ['M5 12h14']
+	minus: ['M5 12h14'],
+	link: ['M10 14a4 4 0 005.66 0l3-3a4 4 0 00-5.66-5.66l-1 1', 'M14 10a4 4 0 00-5.66 0l-3 3a4 4 0 005.66 5.66l1-1'],
+	check: ['M5 12l5 5 9-10']
 } as const;
 
 export type IconName = keyof typeof ICONS;
