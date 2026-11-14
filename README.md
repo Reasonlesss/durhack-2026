@@ -23,6 +23,10 @@ audio after a click or tap, so the first sound comes after your first interactio
 One screen: the shape canvas. The demo loads with five chains (groove, hook, sparkle,
 bass, chords) that all start together. Undo, share link, save and open sit bottom-left.
 
+**Workspaces** (bottom right): each is a canvas of its own. The dot turns a workspace on or
+off; every enabled one plays together, locked to the same beat. Click a name to switch to
+it, double-click to rename, + for a new one, × removes the one you're on.
+
 | Where | What |
 | --- | --- |
 | `src/lib/music.ts` | Key, modes, chords, height → pitch, everyday-word readouts |
@@ -41,6 +45,7 @@ bass, chords) that all start together. Undo, share link, save and open sit botto
 - Draw a big circle around some notes (dreamy), or a big square (echo).
 - Drag "a rave" off the shelf; drag a note back onto the shelf to remove it.
 - Open the feel chip and move the dot while it plays.
+- Press + (bottom right) for a new workspace, build a beat there, and switch back: both play.
 - Copy a link (bottom left) and open it in another browser.
 
 Saved data lives in `localStorage`. To start over, clear site data, or open DevTools and

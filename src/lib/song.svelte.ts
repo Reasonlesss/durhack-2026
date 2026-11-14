@@ -5,9 +5,12 @@
 import { uid } from './ids';
 import { nextInstrument, rowOf, yOfRow } from './music';
 import { demoSong } from './seed';
-import { emptyCanvas, type Canvas, type Effect, type Harmony, type Line, type Note, type Song } from './types';
+import { emptyCanvas, type Canvas, type Effect, type Harmony, type Line, type Note, type Song, type Workspace } from './types';
 
 const STORAGE_KEY = 'shape-sequencer:canvas';
+const CURRENT_KEY = 'shape-sequencer:workspace';
+/** Workspace names: words, never numbers. */
+const NAMES = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const HISTORY_LIMIT = 200;
 /** Edits sharing a coalesce key within this window become one undo step (drags, scrolls). */
 const COALESCE_MS = 1200;
@@ -29,18 +32,34 @@ function load(): Song {
 /** Minimal shape check for loaded, imported or shared JSON. Throws on anything unusable. */
 export function validate(data: unknown): Song {
 	const s = data as Song;
-	if (!s || typeof s !== 'object' || !s.canvas || !s.harmony) throw new Error('That file is not a Shape Sequencer song.');
+	if (!s || typeof s !== 'object' || !s.harmony) throw new Error('That file is not a Shape Sequencer song.');
 	s.id ??= uid('song_');
 	s.name ??= 'my song';
 	s.bpm = clamp(Number(s.bpm) || 100, 50, 200);
 	s.swing ??= 'tight';
-	const c = s.canvas as Partial<Canvas>;
-	s.canvas = { notes: c.notes ?? [], lines: c.lines ?? [], effects: c.effects ?? [] };
+	// Older saves had a single canvas: it becomes the first workspace.
+	const legacy = (s as unknown as { canvas?: Canvas }).canvas;
+	if (!Array.isArray(s.workspaces)) s.workspaces = legacy ? [{ id: uid('w_'), name: 'one', enabled: true, canvas: legacy }] : [];
+	delete (s as unknown as { canvas?: Canvas }).canvas;
+	if (!s.workspaces.length) s.workspaces.push({ id: uid('w_'), name: 'one', enabled: true, canvas: emptyCanvas() });
+	for (const w of s.workspaces) {
+		const c = (w.canvas ?? {}) as Partial<Canvas>;
+		w.canvas = { notes: c.notes ?? [], lines: c.lines ?? [], effects: c.effects ?? [] };
+		w.enabled ??= true;
+	}
 	return s;
 }
 
 class SongStore {
 	song = $state<Song>(load());
+	/** The workspace being edited (UI state: switching is not an undo step). */
+	current = $state<string>(localStorage.getItem(CURRENT_KEY) ?? '');
+	/** The current workspace, falling back to the first if it no longer exists (e.g. after undo). */
+	workspace = $derived(this.song.workspaces.find((w) => w.id === this.current) ?? this.song.workspaces[0]);
+	/** Shapes of the current workspace. */
+	get canvas() {
+		return this.workspace.canvas;
+	}
 	canUndo = $state(false);
 	canRedo = $state(false);
 	/** Bumped on every change; lets caches (the chain graph) know when to rebuild. Not reactive. */
@@ -54,6 +73,7 @@ class SongStore {
 		// Autosave: JSON.stringify reads every field, so any change re-runs this.
 		$effect.root(() => {
 			$effect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(this.song)));
+			$effect(() => localStorage.setItem(CURRENT_KEY, this.workspace.id));
 		});
 	}
 
@@ -106,10 +126,48 @@ class SongStore {
 		this.version++;
 	};
 
+	// ---- workspaces ------------------------------------------------------
+
+	switchTo = (id: string) => (this.current = id);
+	/** Make a new empty workspace and switch to it. */
+	addWorkspace = () => {
+		const id = uid('w_');
+		this.commit((s) => {
+			const used = new Set(s.workspaces.map((w) => w.name));
+			const name = NAMES.find((n) => !used.has(n)) ?? 'another';
+			s.workspaces.push({ id, name, enabled: true, canvas: emptyCanvas() });
+		});
+		this.current = id;
+	};
+	/** Enabled workspaces play; disabled ones stay silent but keep their shapes. */
+	toggleWorkspace = (id: string) =>
+		this.commit((s) => {
+			const w = s.workspaces.find((x) => x.id === id);
+			if (w) w.enabled = !w.enabled;
+		});
+	renameWorkspace = (id: string, name: string) => {
+		if (!name.trim() || this.song.workspaces.find((w) => w.id === id)?.name === name.trim()) return;
+		this.commit((s) => {
+			const w = s.workspaces.find((x) => x.id === id);
+			if (w) w.name = name.trim().slice(0, 24);
+		});
+	};
+	removeWorkspace = (id: string) => {
+		if (this.song.workspaces.length <= 1) return;
+		const i = this.song.workspaces.findIndex((w) => w.id === id);
+		this.commit((s) => (s.workspaces = s.workspaces.filter((w) => w.id !== id)));
+		if (this.current === id) this.current = this.song.workspaces[Math.max(0, i - 1)].id;
+	};
+
 	// ---- canvas ----------------------------------------------------------
 
+	/** Edit the current workspace's canvas. */
 	private edit(fn: (c: Canvas) => void, key?: string) {
-		this.commit((s) => fn(s.canvas), key);
+		const id = this.workspace.id;
+		this.commit((s) => {
+			const w = s.workspaces.find((x) => x.id === id);
+			if (w) fn(w.canvas);
+		}, key);
 	}
 	private note = (c: Canvas, id: string) => c.notes.find((n) => n.id === id);
 	private effect = (c: Canvas, id: string) => c.effects.find((e) => e.id === id);
@@ -121,7 +179,7 @@ class SongStore {
 			c.notes.push({ ...n, id, y: yOfRow(rowOf(n.y)) });
 			if (connectFrom) c.lines.push({ id: uid('l_'), from: connectFrom, to: id, div: 1 });
 		});
-		return this.note(this.song.canvas, id)!;
+		return this.note(this.canvas, id)!;
 	};
 	/** Move / resize / turn a note. Pass a gesture id so a whole drag is one undo step. */
 	updateNote = (id: string, patch: Partial<Note>, gesture?: string) =>
@@ -155,7 +213,7 @@ class SongStore {
 	addEffect = (e: Omit<Effect, 'id'>) => {
 		const id = uid('e_');
 		this.edit((c) => c.effects.push({ ...e, id, r: clamp(e.r, 50, 320) }));
-		return this.effect(this.song.canvas, id)!;
+		return this.effect(this.canvas, id)!;
 	};
 	updateEffect = (id: string, patch: Partial<Effect>, gesture?: string) =>
 		this.edit((c) => {

@@ -35,7 +35,8 @@ class Transport {
 	private tick = 0;
 	private nextTime = 0;
 	private queue: { time: number; tick: number }[] = [];
-	private runner = new ChainRunner();
+	/** One chain runner per workspace, so each keeps its own phrase timing. */
+	private runners = new Map<string, ChainRunner>();
 
 	play = async () => {
 		if (this.isPlaying) return;
@@ -44,7 +45,7 @@ class Transport {
 		this.tick = 0;
 		this.nextTime = ctx.currentTime + 0.06;
 		this.queue = [];
-		this.runner.reset();
+		this.runners.clear();
 		this.isPlaying = true;
 		this.everPlayed = true;
 		this.timer = setInterval(this.schedule, PUMP_MS);
@@ -60,20 +61,27 @@ class Transport {
 		this.queue = [];
 	};
 
+	private runner(id: string) {
+		return this.runners.get(id) ?? this.runners.set(id, new ChainRunner()).get(id)!;
+	}
+
 	toggle = () => (this.isPlaying ? this.stop() : this.play());
 
 	/** Fill the lookahead window. Runs on a timer, but all times come from the audio clock. */
 	private schedule = () => {
 		const ctx = audio();
 		while (this.nextTime < ctx.currentTime + LOOKAHEAD_S) {
-			const { bpm, harmony, canvas, swing } = songStore.song;
+			const { bpm, harmony, swing, workspaces } = songStore.song;
 			const tickDur = 60 / bpm / TICKS_PER_BEAT;
 			const time = this.nextTime + swingOffset(this.tick, swing ?? 'tight', bpm);
-			const due = this.runner.step(graphOf(canvas, songStore.version), this.tick);
-			const sounding = due.filter((d) => d.kind === 'note' && d.note.inst !== 'pause').length;
-			for (const d of due) {
-				if (d.kind === 'note') sound(canvas, d.note, time, harmony, bpm, 1 / Math.sqrt(Math.max(1, sounding)));
-				else vis.push({ kind: 'line', id: d.line.id, at: time + outputDelay(), dur: d.ticks * tickDur });
+			// Every enabled workspace plays together, all locked to the same tick.
+			const due = workspaces
+				.filter((w) => w.enabled)
+				.flatMap((w) => this.runner(w.id).step(graphOf(w.canvas, songStore.version), this.tick).map((d) => ({ w, d })));
+			const sounding = due.filter(({ d }) => d.kind === 'note' && d.note.inst !== 'pause').length;
+			for (const { w, d } of due) {
+				if (d.kind === 'note') sound(w.id, w.canvas, d.note, time, harmony, bpm, 1 / Math.sqrt(Math.max(1, sounding)));
+				else vis.push({ ws: w.id, kind: 'line', id: d.line.id, at: time + outputDelay(), dur: d.ticks * tickDur });
 			}
 			if (this.metronome && this.tick % TICKS_PER_BEAT === 0) click(time, this.tick % (TICKS_PER_BEAT * BEATS_PER_BAR) === 0);
 			this.hooks.onTick?.({ beat: this.tick / TICKS_PER_BEAT, time });
@@ -99,21 +107,26 @@ class Transport {
 }
 
 /** Play one note plus its visuals (note flash, effect flashes). */
-function sound(canvas: Canvas, note: Note, time: number, harmony: Harmony, bpm: number, gain = 1, short = false) {
+function sound(ws: string, canvas: Canvas, note: Note, time: number, harmony: Harmony, bpm: number, gain = 1, short = false) {
 	const fx = effectsFor(note, canvas.effects, polys(canvas));
 	playNote(note, rowOf(note.y), { time, harmony, fx, gain, bpm, short });
 	if (note.inst === 'pause') return;
 	const at = time + outputDelay();
-	vis.push({ kind: 'note', id: note.id, at, dur: 0.22 });
-	for (const h of fx) vis.push({ kind: 'effect', id: h.effect.id, at, dur: 0.3 });
+	vis.push({ ws, kind: 'note', id: note.id, at, dur: 0.22 });
+	for (const h of fx) vis.push({ ws, kind: 'effect', id: h.effect.id, at, dur: 0.3 });
 }
 
-let polyCache: { version: number; map: Map<string, [number, number][]> } | null = null;
+const polyCache = new WeakMap<Canvas, { version: number; map: Map<string, [number, number][]> }>();
+let prunedAt = -1;
 function polys(canvas: Canvas) {
-	if (polyCache?.version === songStore.version) return polyCache.map;
+	const hit = polyCache.get(canvas);
+	if (hit?.version === songStore.version) return hit.map;
 	const map = new Map(canvas.effects.map((e) => [e.id, effectPolygon(e)]));
-	polyCache = { version: songStore.version, map };
-	pruneSends(new Set(canvas.effects.map((e) => e.id)));
+	polyCache.set(canvas, { version: songStore.version, map });
+	if (prunedAt !== songStore.version) {
+		prunedAt = songStore.version;
+		pruneSends(new Set(songStore.song.workspaces.flatMap((w) => w.canvas.effects.map((e) => e.id))));
+	}
 	return map;
 }
 
@@ -121,8 +134,8 @@ function polys(canvas: Canvas) {
 export function preview(note: Note, short = false) {
 	const ctx = audio();
 	ctx.resume();
-	const { canvas, harmony, bpm } = songStore.song;
-	sound(canvas, note, ctx.currentTime + 0.01, harmony, bpm, 1, short);
+	const { harmony, bpm } = songStore.song;
+	sound(songStore.workspace.id, songStore.canvas, note, ctx.currentTime + 0.01, harmony, bpm, 1, short);
 }
 
 /** Hear a chord for a harmony (the pad, while stopped). */

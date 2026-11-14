@@ -51,6 +51,14 @@ export interface Canvas {
 
 export const emptyCanvas = (): Canvas => ({ notes: [], lines: [], effects: [] });
 
+/** One canvas of its own. Enabled workspaces play together; the current one is edited. */
+export interface Workspace {
+	id: string;
+	name: string;
+	enabled: boolean;
+	canvas: Canvas;
+}
+
 export interface Song {
 	id: string;
 	name: string;
@@ -58,7 +66,7 @@ export interface Song {
 	harmony: Harmony;
 	/** How late off-beats land: tight (none), loose, lazy. */
 	swing: 'tight' | 'loose' | 'lazy';
-	canvas: Canvas;
+	workspaces: Workspace[];
 }
 
 export const FEELS: Feel[] = ['spooky', 'moody', 'mellow', 'sunny', 'dreamy'];

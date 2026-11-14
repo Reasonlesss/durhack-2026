@@ -7,6 +7,7 @@
 	import { onMount } from 'svelte';
 	import Hud from './Hud.svelte';
 	import Tools from './Tools.svelte';
+	import Workspaces from './Workspaces.svelte';
 	import Onboarding from './Onboarding.svelte';
 	import Shelf, { type ShelfItem } from './Shelf.svelte';
 	import { ghostEffect, ghostInstrument, NOTE_STROKE_MAX } from './gestures';
@@ -44,9 +45,9 @@
 	let view = $state<View>({ x: 0, y: 0, k: 1 });
 	let lastInst: Instrument = 'lead';
 
-	const canvas = $derived(songStore.song.canvas);
+	const canvas = $derived(songStore.canvas);
 	const accent = $derived(FEEL_COLOURS[songStore.song.harmony.feel]);
-	const graph = () => graphOf(songStore.song.canvas, songStore.version);
+	const graph = () => graphOf(songStore.canvas, songStore.version);
 
 	// ---- readout chip ------------------------------------------------------------------
 	let readout = $state<{ text: string; x: number; y: number; key: number } | null>(null);
@@ -527,14 +528,14 @@
 			g.setTransform(dpr, 0, 0, dpr, 0, 0);
 			const ctx = audio();
 			draw(g, {
-				canvas: songStore.song.canvas,
+				canvas: songStore.canvas,
 				graph: graph(),
 				view,
 				width,
 				height,
 				accent,
 				now: ctx.state === 'running' ? ctx.currentTime : -1,
-				events: vis.events,
+				events: vis.events.filter((v) => v.ws === songStore.workspace.id),
 				hoverId,
 				liftId,
 				dragRow,
@@ -621,6 +622,8 @@
 
 	<div class="tools" data-chrome><Tools /></div>
 
+	<div class="spaces" data-chrome><Workspaces /></div>
+
 	{#if readout}
 		{#key readout.key}
 			<div class="readout" style="left: {readout.x}px; top: {readout.y}px" role="status">{readout.text}</div>
@@ -695,6 +698,11 @@
 		position: absolute;
 		top: 8px;
 		right: 12px;
+	}
+	.spaces {
+		position: absolute;
+		right: 12px;
+		bottom: 8px;
 	}
 	.tools {
 		position: absolute;

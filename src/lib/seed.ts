@@ -66,6 +66,6 @@ export function demoSong(): Song {
 		bpm: 104,
 		harmony: { feel: 'sunny', chord: 'home' },
 		swing: 'tight',
-		canvas: merge(groove(), hook(), sparkle(), bass(), chords())
+		workspaces: [{ id: uid('w_'), name: 'one', enabled: true, canvas: merge(groove(), hook(), sparkle(), bass(), chords()) }]
 	};
 }

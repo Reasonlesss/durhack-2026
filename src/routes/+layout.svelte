@@ -7,12 +7,13 @@
 	import { transport } from '#lib/transport.svelte.ts';
 	import { FEEL_COLOURS } from '#lib/types.ts';
 	import { ui } from '#lib/ui.svelte.ts';
+	import { vis } from '#lib/vis.ts';
 	import { onMount } from 'svelte';
 
 	let { children } = $props();
 
 	// Dev only: poke at the live stores from the browser console.
-	if (import.meta.env.DEV) Object.assign(window, { __shape: { songStore, transport } });
+	if (import.meta.env.DEV) Object.assign(window, { __shape: { songStore, transport, vis } });
 
 	// A shared link (#song=...) replaces the current song (undoable), then the hash is cleared.
 	onMount(async () => {
