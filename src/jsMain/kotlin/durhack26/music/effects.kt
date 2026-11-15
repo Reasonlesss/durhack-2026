@@ -1,17 +1,20 @@
 package durhack26.music
 
-import durhack26.music.tone.BitCrusher
 import durhack26.music.tone.Chorus
+import durhack26.music.tone.CrossFade
 import durhack26.music.tone.Distortion
 import durhack26.music.tone.FeedbackDelay
 import durhack26.music.tone.Filter
+import durhack26.music.tone.Gain
 import durhack26.music.tone.Reverb
 import durhack26.music.tone.ToneAudioNode
 import durhack26.music.tone.Tremolo
+import durhack26.music.tone.WaveShaper
 import org.w3c.dom.CanvasRenderingContext2D
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.pow
@@ -111,7 +114,7 @@ class EffectControl(val label: String, val describe: (Double) -> String)
  * it gets no handle for it, and [applyParams] ignores that input. Reverb is a circle, so
  * turning it wouldn't look like anything; it has no rotate handle and a fixed mix.
  *
- *   Reverb      amount → decay (0.3 to 8.3 s)          (no rotation: wet fixed at 50%)
+ *   Reverb      amount → decay (0.5 to 8.5 s)          (no rotation: wet fixed at 50%)
  *   Delay       amount → feedback (0 to 85%)           turn → delay time (1/8 to 1 beat)
  *   Distortion  amount → distortion (0 to 1)           turn → wet (30% to 100%)
  *   Filter      amount → lowers the cutoff (12.8 kHz down to 100 Hz)   turn → resonance
@@ -133,9 +136,11 @@ enum class EffectType(
         rotationControl = null,
         scaleControl = EffectControl("Room size") { "${reverbDecay(it).fixed(1)}s" },
     ) {
-        override fun createNode() = Reverb(js("({ decay: 1.5, wet: 0.5 })"))  // wet stays 50%
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            node.asDynamic().decay = reverbDecay(amount)
+        override fun createNode() = EffectNode(Reverb(js("({ decay: 1.5, wet: 0.5 })")))  // wet stays 50%
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            // Changing the decay re-renders the whole impulse response, so only on a real change.
+            val decay = reverbDecay(amount)
+            if (node.control.asDynamic().decay != decay) node.control.asDynamic().decay = decay
         }
     },
     DELAY(
@@ -143,11 +148,11 @@ enum class EffectType(
         rotationControl = EffectControl("Echo gap") { "${delayBeats(it).fixed(2)} beats" },
         scaleControl = EffectControl("Repeats") { percent(delayFeedback(it)) },
     ) {
-        override fun createNode() = FeedbackDelay(js("({ delayTime: 0.25, feedback: 0.4 })"))
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            val fx = node.asDynamic()
-            fx.feedback.value = delayFeedback(amount)
-            fx.delayTime.value = BEAT_SECONDS * delayBeats(turn)
+        override fun createNode() = EffectNode(FeedbackDelay(js("({ delayTime: 0.25, feedback: 0.4 })")))
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            val fx = node.control.asDynamic()
+            glide(fx.feedback, delayFeedback(amount))
+            glide(fx.delayTime, BEAT_SECONDS * delayBeats(turn))
         }
     },
     DISTORTION(
@@ -155,11 +160,11 @@ enum class EffectType(
         rotationControl = EffectControl("Mix") { percent(mixOf(it)) },
         scaleControl = EffectControl("Crunch") { percent(it) },
     ) {
-        override fun createNode() = Distortion(js("({ distortion: 0.4 })"))
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            val fx = node.asDynamic()
+        override fun createNode() = EffectNode(Distortion(js("({ distortion: 0.4 })")))
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            val fx = node.control.asDynamic()
             fx.distortion = amount
-            fx.wet.value = mixOf(turn)
+            glide(fx.wet, mixOf(turn))
         }
     },
     FILTER(
@@ -167,11 +172,11 @@ enum class EffectType(
         rotationControl = EffectControl("Ring") { percent(it) },
         scaleControl = EffectControl("Muffle") { percent(it) },
     ) {
-        override fun createNode() = Filter(js("({ frequency: 1000, type: 'lowpass' })"))
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            val fx = node.asDynamic()
-            fx.frequency.value = filterCutoff(amount)
-            fx.Q.value = filterResonance(turn)
+        override fun createNode() = EffectNode(Filter(js("({ frequency: 1000, type: 'lowpass' })")))
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            val fx = node.control.asDynamic()
+            glide(fx.frequency, filterCutoff(amount))
+            glide(fx.Q, filterResonance(turn))
         }
     },
     BITCRUSH(
@@ -179,11 +184,11 @@ enum class EffectType(
         rotationControl = EffectControl("Mix") { percent(mixOf(it)) },
         scaleControl = EffectControl("Crush") { "${crushBits(it)}-bit" },
     ) {
-        override fun createNode() = BitCrusher(js("({ bits: 8 })"))
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            val fx = node.asDynamic()
-            fx.bits.value = crushBits(amount)
-            fx.wet.value = mixOf(turn)
+        override fun createNode() = NativeBitCrusher().node
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            val fx = node.control as NativeBitCrusher
+            fx.bits = crushBits(amount)  // whole steps: nothing to glide between
+            glide(fx.mix.fade, mixOf(turn))
         }
     },
     CHORUS(
@@ -191,13 +196,13 @@ enum class EffectType(
         rotationControl = EffectControl("Wobble speed") { "${chorusRate(it).fixed(1)} Hz" },
         scaleControl = EffectControl("Width") { percent(it) },
     ) {
-        override fun createNode() = Chorus(js("({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: 0.6 })")).also {
+        override fun createNode() = EffectNode(Chorus(js("({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: 0.6 })")).also {
             it.asDynamic().start()  // its wobble runs on an LFO that has to be started
-        }
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            val fx = node.asDynamic()
+        })
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            val fx = node.control.asDynamic()
             fx.depth = amount
-            fx.frequency.value = chorusRate(turn)
+            glide(fx.frequency, chorusRate(turn))
         }
     },
     STUTTER(
@@ -206,14 +211,14 @@ enum class EffectType(
         scaleControl = EffectControl("Depth") { percent(it) },
     ) {
         // Chops the sound on and off in time with the beat.
-        override fun createNode() = Tremolo(js("({ frequency: 4, type: 'square', depth: 1, spread: 0 })")).also {
+        override fun createNode() = EffectNode(Tremolo(js("({ frequency: 4, type: 'square', depth: 1, spread: 0 })")).also {
             it.asDynamic().start()
-        }
-        override fun applyParams(node: ToneAudioNode, amount: Double, turn: Double) {
-            val fx = node.asDynamic()
-            fx.depth.value = amount
+        })
+        override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
+            val fx = node.control.asDynamic()
+            glide(fx.depth, amount)
             // A 1/4 note is one beat, so 1/n notes come n/4 times a beat.
-            fx.frequency.value = stutterDivision(turn) / 4.0 / BEAT_SECONDS
+            glide(fx.frequency, stutterDivision(turn) / 4.0 / BEAT_SECONDS)
         }
     };
 
@@ -222,13 +227,74 @@ enum class EffectType(
     fun tracePath(ctx: CanvasRenderingContext2D) = shape.trace(ctx)
     fun containsLocal(x: Double, y: Double) = shape.contains(x, y)
 
-    abstract fun createNode(): ToneAudioNode
-    abstract fun applyParams(node: ToneAudioNode, amount: Double, turn: Double)
+    abstract fun createNode(): EffectNode
+    abstract fun applyParams(node: EffectNode, amount: Double, turn: Double)
+}
+
+/**
+ * One effect's nodes. Sound goes into [input] and comes out of [output]; [control] is what
+ * applyParams adjusts. For most effects all three are the same Tone.js effect.
+ */
+class EffectNode(
+    val input: ToneAudioNode,
+    val output: ToneAudioNode = input,
+    private val parts: List<ToneAudioNode> = listOf(input),
+    val control: Any = input,
+) {
+    fun dispose() = parts.forEach { it.dispose() }
+}
+
+/** How many points the bitcrusher's staircase is worked out at: enough that every step is sharp. */
+private const val CRUSH_CURVE_LENGTH = 8192
+
+/** Rounds every sample to one of 2^[bits] levels, as Tone.js's BitCrusher does. */
+private fun staircase(bits: Int): (Double) -> Double {
+    val step = 0.5.pow(bits - 1)
+    return { x -> step * floor(x / step + 0.5) }
+}
+
+/**
+ * A bitcrusher made of a built-in WaveShaper. Tone.js's BitCrusher runs JavaScript on the
+ * audio thread (an AudioWorklet), which costs far more and can stall it.
+ */
+fun crushShaper(bits: Int) = WaveShaper(staircase(bits), CRUSH_CURVE_LENGTH)
+
+/** [crushShaper] with a wet / dry mix, for the Bitcrush effect. */
+private class NativeBitCrusher {
+    private val input = Gain()
+    private val shaper = crushShaper(8)
+    val mix = CrossFade(1.0)
+    val node = EffectNode(input, mix, listOf(input, shaper, mix), this)
+
+    var bits = 8
+        set(value) {
+            if (value == field) return
+            field = value
+            shaper.setMap(staircase(value), CRUSH_CURVE_LENGTH)
+        }
+
+    init {
+        input.connect(mix.a)
+        input.connect(shaper)
+        shaper.connect(mix.b)
+    }
+}
+
+/** How long a parameter takes to move to a new value, in seconds. */
+private const val GLIDE_SECONDS = 0.05
+
+/**
+ * Moves Tone.js [param] to [value] over [GLIDE_SECONDS]. Jumping straight there makes a
+ * click, and dragging a shape changes its parameters every tick.
+ */
+private fun glide(param: dynamic, value: Double) {
+    param.rampTo(value, GLIDE_SECONDS)
 }
 
 // How the 0..1 inputs map to sound. Shared by applyParams and the handle labels, so the
 // numbers shown always match what's heard.
-private fun reverbDecay(amount: Double) = 0.3 + amount * 8.0
+/** In half-second steps: each change re-renders the reverb, which is too slow to do every tick. */
+private fun reverbDecay(amount: Double) = 0.5 + (amount * 16).roundToInt() / 2.0
 private fun delayBeats(turn: Double) = 0.125 + turn * 0.875
 private fun delayFeedback(amount: Double) = amount * 0.85
 private fun mixOf(turn: Double) = 0.3 + turn * 0.7

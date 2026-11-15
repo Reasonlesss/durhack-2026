@@ -1,6 +1,5 @@
 package durhack26.music
 
-import durhack26.music.tone.BitCrusher
 import durhack26.music.tone.Distortion
 import durhack26.music.tone.DuoSynth
 import durhack26.music.tone.FMSynth
@@ -68,7 +67,7 @@ enum class InstrumentType(
         override fun createSound(level: Int) = through(
             DrumSound.at(level).create(),
             Distortion(js("({ distortion: 0.8 })")),
-            BitCrusher(js("({ bits: 6 })")),
+            crushShaper(6),
         )
         override fun play(sound: InstrumentSound, level: Int, time: Double) = DrumSound.at(level).play(sound.synth, time)
         override fun describe(level: Int) = DrumSound.at(level).label
@@ -125,7 +124,7 @@ enum class InstrumentType(
         override fun createSound(level: Int) = through(
             Synth(js("({ oscillator: { type: 'fatsquare', count: 3, spread: 20 }, envelope: { attack: 0.005, decay: 0.15, sustain: 0.5, release: 0.2 }, volume: -12 })")),
             Distortion(js("({ distortion: 0.9 })")),
-            BitCrusher(js("({ bits: 5 })")),
+            crushShaper(5),
         )
     },
     CHIP("Chip", InstrumentCategory.LEADS, octaveShift = 1, duration = "16n") {

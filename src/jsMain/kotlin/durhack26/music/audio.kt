@@ -1,12 +1,14 @@
 package durhack26.music
 
-import durhack26.music.tone.Limiter
+import durhack26.music.tone.Compressor
+import durhack26.music.tone.Context
+import durhack26.music.tone.StandardAudioContext
 import durhack26.music.tone.ToneAudioNode
 import durhack26.music.tone.getTransport
 import durhack26.music.tone.now
+import durhack26.music.tone.setContext
 import durhack26.music.tone.start
 import kotlinx.browser.window
-import kotlin.math.PI
 
 /*
  * Plays every enabled universe's timeline with Tone.js.
@@ -15,9 +17,14 @@ import kotlin.math.PI
  * tick the notes due at (tick mod that universe's loop length) are played. The timeline is
  * read fresh each tick (it's cached, so this is cheap), which means edits are heard live.
  *
- * Each note on the canvas gets its own voice: its instrument type's synth, wired through
- * its effect types' nodes, innermost first, then to the speakers. A voice is rebuilt only
- * when its type or set of effects changes; effect parameters are just updated.
+ * Audio nodes are shared as much as possible, because every one costs the audio thread work
+ * all the time, even when silent; one synth and effect set per note was enough to overload
+ * it and make it crackle and cut out.
+ * - Effects: every note inside exactly the same effects plays through one [Chain] of their
+ *   nodes, innermost first, then to [master].
+ * - Synths: notes of the same instrument (and drum) through the same chain share a [Pool]
+ *   of synths, which only grows to as many notes as actually sound at once.
+ * Pools and chains nothing has played through for a while are disposed.
  *
  * What each instrument and effect sounds like is defined on InstrumentType and EffectType.
  */
@@ -26,33 +33,106 @@ const val BPM = 124.0  // house tempo
 const val BEAT_SECONDS = 60.0 / BPM
 private const val TICK_SECONDS = BEAT_SECONDS / TICKS_PER_BEAT
 
-/** How long a replaced voice is kept, so its reverb / delay tail can finish, in ms. */
-private const val DISPOSE_DELAY_MS = 5000
+/**
+ * The sample rate everything runs at. Browsers otherwise use the output device's, which
+ * can be 96 kHz or more (e.g. SteelSeries Sonar): twice the work for no audible gain.
+ */
+private const val SAMPLE_RATE = 48000
 
-private class Voice(
-    val type: InstrumentType,
-    /** The type's synthKey for the level this voice was made for. */
-    val synthKey: Int,
-    val effects: List<Effect>,
-    val sound: InstrumentSound,
-    val chain: List<ToneAudioNode>,
-) {
+/**
+ * How far ahead notes are scheduled, in seconds. Gives the scheduler slack when the page
+ * is busy, so notes don't arrive late and stutter.
+ */
+private const val LOOK_AHEAD_SECONDS = 0.15
+
+/**
+ * Sets up the audio context. Must run before anything else makes a sound. "balanced" asks
+ * for a bigger audio buffer than the default "interactive", which stops dropouts on
+ * machines (often Windows) that can't keep up with the smallest one.
+ */
+fun setupAudio() {
+    val rawOptions: dynamic = js("({})")
+    rawOptions.sampleRate = SAMPLE_RATE
+    rawOptions.latencyHint = "balanced"
+    val options: dynamic = js("({})")
+    options.context = StandardAudioContext(rawOptions)
+    options.latencyHint = "balanced"
+    options.lookAhead = LOOK_AHEAD_SECONDS
+    // Closes the context Tone.js makes as soon as it's loaded, at the device's sample rate.
+    setContext(Context(options), disposeOld = true)
+}
+
+/** How long a note is allowed to ring after it ends, in seconds, when its synth doesn't say. */
+private const val RELEASE_SECONDS = 1.6
+
+/** The most synths one pool keeps. Past it, the one that started longest ago is reused. */
+private const val MAX_POLYPHONY = 8
+
+/**
+ * How long a pool or chain is kept after it last played, in seconds. Longer than the longest
+ * loop, so one note per loop doesn't rebuild it every time; that also lets tails ring out.
+ */
+private val IDLE_SECONDS = TIMELINE_BEATS * BEAT_SECONDS + 5
+
+/** The effects a note is inside, innermost first, each with the type it had when the chain was built. */
+private typealias ChainKey = List<Pair<Effect, EffectType>>
+
+/** One set of effect nodes, wired innermost → outermost → master. */
+private class Chain(val key: ChainKey, val nodes: List<EffectNode>) {
+    val input get() = nodes.first().input
+
+    /** How many pools play through it. At 0 it's disposed. */
+    var users = 0
+
     /** The (amount, turn) last applied to each effect, so unchanged ones aren't touched. */
     var applied: List<Pair<Double, Double>> = emptyList()
 
-    fun dispose() {
-        sound.nodes.forEach { it.dispose() }
-        chain.forEach { it.dispose() }
-    }
+    fun dispose() = nodes.forEach { it.dispose() }
 }
 
-private val voices = mutableMapOf<Instrument, Voice>()
+private val chains = mutableMapOf<ChainKey, Chain>()
+
+/** A synth in a [Pool], and the audio time it's sounding until. */
+private class Slot(val sound: InstrumentSound) {
+    var busyUntil = 0.0
+}
+
+private data class PoolKey(val type: InstrumentType, val synthKey: Int, val chain: ChainKey)
+
+/** Synths for one instrument (and drum, see synthKey) through one chain (or none). */
+private class Pool(val type: InstrumentType, val synthKey: Int, val chain: Chain?) {
+    val slots = mutableListOf<Slot>()
+
+    /** The audio time it last played. */
+    var lastUsed = 0.0
+
+    /**
+     * A synth to play a note at [time] on. Drums only ever get one, so each hit cuts off the
+     * last, as on a drum machine. Anything else gets a synth that's finished, or a new one.
+     */
+    fun slotFor(level: Int, time: Double): Slot? {
+        val free = if (type.category == InstrumentCategory.DRUMS) slots.firstOrNull() else slots.firstOrNull { it.busyUntil <= time }
+        if (free != null) return free
+        if (slots.size >= MAX_POLYPHONY) return slots.minBy { it.busyUntil }
+        val sound = type.createSound(level) ?: return null
+        sound.output.connect(chain?.input ?: master)
+        return Slot(sound).also { slots += it }
+    }
+
+    fun dispose() = slots.forEach { slot -> slot.sound.nodes.forEach { it.dispose() } }
+}
+
+private val pools = mutableMapOf<PoolKey, Pool>()
 
 /**
- * Everything plays through this on its way to the speakers. Distorted and stacked sounds
- * get loud fast; it stops them clipping.
+ * Everything plays through this on its way to the speakers. Distorted, resonant and stacked
+ * sounds get loud fast; it keeps them under full scale, where they'd otherwise be hard-clipped
+ * into crackle. Unlike Tone.js's Limiter (10 ms release, 30 dB knee), it catches fast peaks,
+ * and releases slowly enough not to distort bass.
  */
-private val master: ToneAudioNode by lazy { Limiter(js("({ threshold: -3 })")).toDestination() }
+private val master: ToneAudioNode by lazy {
+    Compressor(js("({ threshold: -6, ratio: 20, knee: 0, attack: 0.001, release: 0.15 })")).toDestination()
+}
 private var tick = 0
 private var repeatId: Int? = null
 
@@ -78,8 +158,10 @@ private fun stopPlayback() {
     repeatId?.let { transport.clear(it) }
     repeatId = null
     transport.stop()
-    voices.values.forEach { it.dispose() }
-    voices.clear()
+    pools.values.forEach { it.dispose() }
+    pools.clear()
+    chains.values.forEach { it.dispose() }
+    chains.clear()
 }
 
 /**
@@ -114,10 +196,75 @@ private fun onTick(time: Double) {
         if (!universe.enabled) continue
         val timeline = universe.timeline
         if (timeline.events.isEmpty()) continue
-        for (event in timeline.eventsAt(now % timeline.loopTicks)) {
-            val voice = voiceFor(event) ?: continue
-            voice.type.play(voice.sound, event.instrument.level, time)
-            pulseWhenHeard(event.instrument, time)
+        for (event in timeline.eventsAt(now % timeline.loopTicks)) play(event, time)
+    }
+    if (now % TICKS_PER_BEAT == 0) disposeIdle(time)
+}
+
+/** Plays [event] at audio time [time] on a synth from its pool. */
+private fun play(event: NoteEvent, time: Double) {
+    val note = event.instrument
+    if (note.type == InstrumentType.SILENT) return  // nothing to play, so don't build anything
+    val level = note.level
+    val key = PoolKey(note.type, note.type.synthKey(level), event.effects.map { it.effect to it.effect.type })
+    val pool = pools.getOrPut(key) { Pool(key.type, key.synthKey, acquire(key.chain)) }
+    pool.chain?.let { applyParams(it, event.effects) }
+
+    val slot = pool.slotFor(level, time) ?: return
+    slot.busyUntil = time + noteSeconds(note.type.duration) + releaseSeconds(slot.sound)
+    pool.lastUsed = time
+    note.type.play(slot.sound, level, time)
+    pulseWhenHeard(note, time)
+}
+
+/**
+ * How long [sound] rings after a note ends, from its envelope's release; [RELEASE_SECONDS]
+ * if that's not a plain number of seconds. The shorter it is, the fewer synths a pool needs.
+ */
+private fun releaseSeconds(sound: InstrumentSound): Double {
+    val synth = sound.synth.asDynamic()
+    val release = synth.envelope?.release ?: synth.voice0?.envelope?.release
+    return if (jsTypeOf(release) == "number") release.unsafeCast<Double>() else RELEASE_SECONDS
+}
+
+/** How long a note value like "8n" (an eighth note) lasts, in seconds. */
+private fun noteSeconds(duration: String) =
+    duration.removeSuffix("n").toDoubleOrNull()?.let { BEAT_SECONDS * 4 / it } ?: BEAT_SECONDS
+
+/** Sets [chain]'s effects from [effects], skipping any that haven't changed. */
+private fun applyParams(chain: Chain, effects: List<EffectParams>) {
+    val params = effects.map { it.amount to it.turn }
+    if (params == chain.applied) return
+    params.forEachIndexed { i, (amount, turn) ->
+        if (chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
+    }
+    chain.applied = params
+}
+
+/** The chain for [key], built if there isn't one yet, with one more user. Null for no effects. */
+private fun acquire(key: ChainKey): Chain? {
+    if (key.isEmpty()) return null
+    val chain = chains.getOrPut(key) {
+        val nodes = key.map { (_, type) -> type.createNode() }
+        // innermost effect → … → outermost effect → master → speakers
+        nodes.zipWithNext { from, to -> from.output.connect(to.input) }
+        nodes.last().output.connect(master)
+        Chain(key, nodes)
+    }
+    chain.users++
+    return chain
+}
+
+/** Disposes pools that haven't played for [IDLE_SECONDS], and any chain left with no pools. */
+private fun disposeIdle(time: Double) {
+    val idle = pools.filterValues { time - it.lastUsed > IDLE_SECONDS }
+    for ((key, pool) in idle) {
+        pools.remove(key)
+        pool.dispose()
+        val chain = pool.chain ?: continue
+        if (--chain.users == 0) {
+            chains.remove(chain.key)
+            chain.dispose()
         }
     }
 }
@@ -130,39 +277,3 @@ private fun pulseWhenHeard(note: Instrument, time: Double) {
     val delayMs = ((time - now()) * 1000).coerceAtLeast(0.0)
     window.setTimeout({ note.lastPlayedAt = window.performance.now() }, delayMs.toInt())
 }
-
-/** The voice for [event]'s note, rebuilt if its type or effects changed. Null if silent. */
-private fun voiceFor(event: NoteEvent): Voice? {
-    val note = event.instrument
-    val effects = event.effects.map { it.effect }
-    var voice = voices[note]
-
-    val level = note.level
-    val synthKey = note.type.synthKey(level)
-    if (voice == null || voice.type != note.type || voice.synthKey != synthKey || !sameEffects(voice.effects, effects)) {
-        voice?.let { old -> window.setTimeout({ old.dispose() }, DISPOSE_DELAY_MS) }
-        voices.remove(note)
-        val sound = note.type.createSound(level) ?: return null
-        val chain = effects.map { it.type.createNode() }
-        // instrument → innermost effect → … → outermost effect → limiter → speakers
-        (listOf(sound.output) + chain).zipWithNext { from, to -> from.connect(to) }
-        (chain.lastOrNull() ?: sound.output).connect(master)
-        voice = Voice(note.type, synthKey, effects, sound, chain)
-        voices[note] = voice
-    }
-
-    val params = event.effects.map { it.amount to it.turn }
-    if (params != voice.applied) {
-        event.effects.forEachIndexed { i, p ->
-            val (amount, turn) = params[i]
-            if (voice.applied.getOrNull(i) != params[i]) p.effect.type.applyParams(voice.chain[i], amount, turn)
-        }
-        voice.applied = params
-    }
-    return voice
-}
-
-private fun sameEffects(a: List<Effect>, b: List<Effect>) =
-    a.size == b.size && a.indices.all { a[it] === b[it] && a[it].type == b[it].type }
-
-
