@@ -6,6 +6,7 @@ import org.w3c.dom.CanvasTextBaseline
 import org.w3c.dom.MIDDLE
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** Size of every instrument shape at scale 1.0, in CSS pixels. */
@@ -124,6 +125,8 @@ fun renderInstruments(ctx: CanvasRenderingContext2D, universe: Universe) {
 
         ctx.save()
         ctx.translate(instrument.x - universe.cameraX, instrument.y - universe.cameraY)
+        // Quieter notes are fainter, but never invisible.
+        val opacity = MIN_OPACITY + (1.0 - MIN_OPACITY) * instrument.volume
 
         if (pulse < 1.0) {
             // A ring of the shape that grows outward and fades.
@@ -132,7 +135,7 @@ fun renderInstruments(ctx: CanvasRenderingContext2D, universe: Universe) {
             ctx.scale(ringScale, ringScale)
             ctx.beginPath()
             instrument.shape.tracePath(ctx)
-            ctx.globalAlpha = 1.0 - pulse
+            ctx.globalAlpha = (1.0 - pulse) * opacity
             ctx.strokeStyle = INSTRUMENT_COLOR
             ctx.lineWidth = PULSE_RING_WIDTH / ringScale
             ctx.stroke()
@@ -144,6 +147,7 @@ fun renderInstruments(ctx: CanvasRenderingContext2D, universe: Universe) {
         ctx.scale(pop, pop)
         ctx.beginPath()
         instrument.shape.tracePath(ctx)
+        ctx.globalAlpha = opacity
         ctx.fillStyle = INSTRUMENT_COLOR
         ctx.fill()
 
@@ -169,6 +173,9 @@ fun renderInstruments(ctx: CanvasRenderingContext2D, universe: Universe) {
     }
 }
 
+/** How see-through a silent note is drawn; louder ones are more solid, up to fully at full volume. */
+private const val MIN_OPACITY = 0.3
+
 private const val PULSE_MS = 400.0         // how long a note's pulse lasts after it plays
 private const val PULSE_POP = 0.35         // how much bigger the shape gets as it plays
 private const val PULSE_RING_GROWTH = 1.5  // how far the ring grows, as a multiple of the shape
@@ -178,11 +185,17 @@ private const val LABEL_FONT = "11px system-ui, -apple-system, sans-serif"
 private const val LABEL_COLOR = ZINC_300
 private const val LABEL_GAP = 6.0  // between the outline and the label
 
-/** Draws what [instrument] plays just to its right. */
+/**
+ * Draws what [instrument] plays just to its right, with its volume while it's held (when
+ * scrolling changes it) or when it isn't at full.
+ */
 private fun renderSoundLabel(ctx: CanvasRenderingContext2D, instrument: Instrument, camX: Double, camY: Double) {
+    val sound = instrument.type.describe(instrument.level)
+    val held = EditorState.dragging === instrument
+    val percent = (instrument.volume * 100).roundToInt()
     renderLabel(
         ctx,
-        instrument.type.describe(instrument.level),
+        if (held || percent < 100) "$sound · $percent%" else sound,
         instrument.x - camX + INSTRUMENT_SIZE / 2 + LINK_MARGIN + LABEL_GAP,
         instrument.y - camY,
     )

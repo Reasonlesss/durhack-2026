@@ -2,6 +2,7 @@ package durhack26.music
 
 import durhack26.music.tone.Compressor
 import durhack26.music.tone.Context
+import durhack26.music.tone.Gain
 import durhack26.music.tone.StandardAudioContext
 import durhack26.music.tone.ToneAudioNode
 import durhack26.music.tone.getTransport
@@ -27,7 +28,10 @@ import kotlin.math.roundToInt
  *   of synths, which only grows to as many notes as actually sound at once.
  * Pools and chains nothing has played through for a while are disposed.
  *
- * What each instrument and effect sounds like is defined on InstrumentType and EffectType.
+ * Each synth plays through its own Gain, set to the note's volume as it plays.
+ *
+ * What each instrument and effect sounds like is defined on InstrumentType (or an imported
+ * sound, see imports.kt) and EffectType.
  */
 
 /** The slowest and fastest tempos allowed, in BPM. */
@@ -101,23 +105,36 @@ private class Chain(val key: ChainKey, val nodes: List<EffectNode>) {
     /** How many pools play through it. At 0 it's disposed. */
     var users = 0
 
-    /** The (amount, turn) last applied to each effect, so unchanged ones aren't touched. */
-    var applied: List<Pair<Double, Double>> = emptyList()
+    /** The turn last applied to each effect, so unchanged ones aren't touched. */
+    var applied: List<Double> = emptyList()
 
     fun dispose() = nodes.forEach { it.dispose() }
 }
 
 private val chains = mutableMapOf<ChainKey, Chain>()
 
-/** A synth in a [Pool], and the audio time it's sounding until. */
-private class Slot(val sound: InstrumentSound) {
+/**
+ * A synth in a [Pool], the Gain that sets each note's volume on its way out, and the audio
+ * time it's sounding until.
+ */
+private class Slot(val sound: InstrumentSound, val gain: Gain) {
     var busyUntil = 0.0
+
+    /** Sets the volume from audio time [time], for the note starting then. */
+    fun setVolume(volume: Double, time: Double) {
+        gain.asDynamic().gain.setValueAtTime(volume, time)
+    }
+
+    fun dispose() {
+        sound.nodes.forEach { it.dispose() }
+        gain.dispose()
+    }
 }
 
-private data class PoolKey(val type: InstrumentType, val synthKey: Int, val chain: ChainKey)
+private data class PoolKey(val type: SoundType, val synthKey: Int, val chain: ChainKey)
 
 /** Synths for one instrument (and drum, see synthKey) through one chain (or none). */
-private class Pool(val type: InstrumentType, val synthKey: Int, val chain: Chain?) {
+private class Pool(val type: SoundType, val synthKey: Int, val chain: Chain?) {
     val slots = mutableListOf<Slot>()
 
     /** The audio time it last played. */
@@ -132,11 +149,13 @@ private class Pool(val type: InstrumentType, val synthKey: Int, val chain: Chain
         if (free != null) return free
         if (slots.size >= MAX_POLYPHONY) return slots.minBy { it.busyUntil }
         val sound = type.createSound(level) ?: return null
-        sound.output.connect(chain?.input ?: master)
-        return Slot(sound).also { slots += it }
+        val gain = Gain()
+        sound.output.connect(gain)
+        gain.connect(chain?.input ?: master)
+        return Slot(sound, gain).also { slots += it }
     }
 
-    fun dispose() = slots.forEach { slot -> slot.sound.nodes.forEach { it.dispose() } }
+    fun dispose() = slots.forEach { it.dispose() }
 }
 
 private val pools = mutableMapOf<PoolKey, Pool>()
@@ -194,16 +213,21 @@ fun unlockAudio() {
 private const val PREVIEW_LIFETIME_MS = 3000
 
 /**
- * Plays one [type] note at [level] straight away, with no effects: used while placing notes
- * so you hear where they are. Works whether or not the song is playing.
+ * Plays one [type] note at [level] and [volume] straight away, with no effects: used while
+ * placing notes so you hear where they are. Works whether or not the song is playing.
  */
-fun previewNote(type: InstrumentType, level: Int) {
+fun previewNote(type: SoundType, level: Int, volume: Double = 1.0) {
     // Audio was unlocked by the press that started the drag (see unlockAudio).
     start().then {
         val sound = type.createSound(level) ?: return@then
-        sound.output.connect(master)
+        val gain = Gain(volume)
+        sound.output.connect(gain)
+        gain.connect(master)
         type.play(sound, level, now())
-        window.setTimeout({ sound.nodes.forEach { it.dispose() } }, PREVIEW_LIFETIME_MS)
+        window.setTimeout({
+            sound.nodes.forEach { it.dispose() }
+            gain.dispose()
+        }, PREVIEW_LIFETIME_MS)
     }
 }
 
@@ -231,6 +255,7 @@ private fun play(event: NoteEvent, time: Double) {
     val slot = pool.slotFor(level, time) ?: return
     slot.busyUntil = time + noteSeconds(note.type.duration) + releaseSeconds(slot.sound)
     pool.lastUsed = time
+    slot.setVolume(note.volume, time)
     note.type.play(slot.sound, level, time)
     pulseWhenHeard(note, time)
 }
@@ -251,19 +276,19 @@ private fun noteSeconds(duration: String) =
 
 /** Sets [chain]'s effects from [effects], skipping any that haven't changed. */
 private fun applyParams(chain: Chain, effects: List<EffectParams>) {
-    val params = effects.map { it.amount to it.turn }
-    if (params == chain.applied) return
-    params.forEachIndexed { i, (amount, turn) ->
-        if (chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
+    val turns = effects.map { it.turn }
+    if (turns == chain.applied) return
+    turns.forEachIndexed { i, turn ->
+        if (chain.applied.getOrNull(i) != turn) chain.key[i].second.applyParams(chain.nodes[i], turn)
     }
-    chain.applied = params
+    chain.applied = turns
 }
 
 /** Re-applies [chain]'s tempo-dependent effects (delay, stutter) after a tempo change. */
 private fun retime(chain: Chain) {
-    chain.applied.forEachIndexed { i, (amount, turn) ->
+    chain.applied.forEachIndexed { i, turn ->
         val type = chain.key[i].second
-        if (type.tempoDependent) type.applyParams(chain.nodes[i], amount, turn)
+        if (type.tempoDependent) type.applyParams(chain.nodes[i], turn)
     }
 }
 

@@ -93,7 +93,7 @@ private fun hook() = part("Hook") {
     chain(steps)
 
     // Around every note: a little reverb, and an echo three quarters of a beat behind.
-    effect(EffectType.REVERB, beat = 3.75, level = 16, scale = 12.0)
+    effect(EffectType.REVERB, beat = 3.75, level = 16, scale = 12.0, turn = 0.4)
     effect(EffectType.DELAY, beat = 3.75, level = 16, scale = 14.0, turn = 0.714)
 }
 

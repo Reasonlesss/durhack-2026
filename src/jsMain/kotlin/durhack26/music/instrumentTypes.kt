@@ -19,6 +19,24 @@ enum class InstrumentCategory(val label: String) {
     LEADS("Leads"),
     KEYS("Keys & pads"),
     FX("FX"),
+    /** Presets and samples the user brought in (see imports.kt). */
+    IMPORTED("Imported"),
+}
+
+/**
+ * Anything a sidebar instrument can play: one of the built-in [InstrumentType]s, or a preset
+ * or sample the user imported (see imports.kt). See [InstrumentType] for what each part does.
+ */
+interface SoundType {
+    val label: String
+    val category: InstrumentCategory
+    val octaveShift: Int
+    val duration: String
+
+    fun synthKey(level: Int): Int
+    fun createSound(level: Int): InstrumentSound?
+    fun play(sound: InstrumentSound, level: Int, time: Double)
+    fun describe(level: Int): String
 }
 
 /**
@@ -29,6 +47,8 @@ class InstrumentSound(
     val synth: ToneAudioNode,
     val output: ToneAudioNode = synth,
     val nodes: List<ToneAudioNode> = listOf(synth),
+    /** Every synth a note triggers. Only imported presets layer more than one. */
+    val voices: List<ToneAudioNode> = listOf(synth),
 )
 
 /** [synth] wired through [processing] in order, e.g. a lead through its own distortion. */
@@ -50,11 +70,11 @@ private fun through(synth: ToneAudioNode, vararg processing: ToneAudioNode): Ins
  * - [describe] names what a level plays, e.g. "E4" or "Snare".
  */
 enum class InstrumentType(
-    val label: String,
-    val category: InstrumentCategory,
-    val octaveShift: Int = 0,
-    val duration: String = "8n",
-) {
+    override val label: String,
+    override val category: InstrumentCategory,
+    override val octaveShift: Int = 0,
+    override val duration: String = "8n",
+) : SoundType {
     // --- Drums ---------------------------------------------------------------------------
     DRUMS("Drums", InstrumentCategory.DRUMS) {
         override fun synthKey(level: Int) = DrumSound.at(level).ordinal
@@ -191,15 +211,18 @@ enum class InstrumentType(
         override fun describe(level: Int) = "Silent"
     };
 
-    open fun synthKey(level: Int) = 0
-    abstract fun createSound(level: Int): InstrumentSound?
+    override fun synthKey(level: Int) = 0
+    abstract override fun createSound(level: Int): InstrumentSound?
 
-    open fun play(sound: InstrumentSound, level: Int, time: Double) {
+    override fun play(sound: InstrumentSound, level: Int, time: Double) {
         sound.synth.asDynamic().triggerAttackRelease(frequencyOf(level, octaveShift), duration, time)
     }
 
-    open fun describe(level: Int) = noteName(level, octaveShift)
+    override fun describe(level: Int) = noteName(level, octaveShift)
 }
+
+/** Every type an instrument can be: the built-in ones, then anything imported (see imports.kt). */
+fun allSoundTypes(): List<SoundType> = InstrumentType.entries + EditorState.importedSounds
 
 /**
  * The drum kit, one sound per level, bottom to top: low sounds low on screen, cymbals

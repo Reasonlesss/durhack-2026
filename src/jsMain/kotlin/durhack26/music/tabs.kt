@@ -1,6 +1,9 @@
 package durhack26.music
 
+import kotlinx.browser.document
+import kotlinx.browser.window
 import org.w3c.dom.CanvasLineCap
+import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.CanvasRenderingContext2D
 import org.w3c.dom.CanvasTextBaseline
 import org.w3c.dom.MIDDLE
@@ -128,7 +131,8 @@ private fun renderToggle(ctx: CanvasRenderingContext2D, x: Double, on: Boolean) 
 
 /**
  * Flips a universe's toggle, closes it via its ×, selects the clicked tab,
- * or adds a universe if + was clicked.
+ * or adds a universe if + was clicked. A second click on a tab's name soon after the
+ * first (a double-click) renames it, once released (see processTabRelease).
  * Returns true if a tab was hit.
  */
 fun processTabClick(x: Double, y: Double): Boolean {
@@ -140,6 +144,10 @@ fun processTabClick(x: Double, y: Double): Boolean {
     } else if (showsClose(tab) && tab.closeContains(x, y)) {
         closeUniverse(tab.universe!!)
     } else if (tab.universe != null) {
+        val now = window.performance.now()
+        if (lastNameClick === tab.universe && now - lastNameClickAt < DOUBLE_CLICK_MS) renamePressed = tab.universe
+        lastNameClick = tab.universe
+        lastNameClickAt = now
         EditorState.selectedUniverse = tab.universe
     } else {
         // Lowest unused number, so closing tabs doesn't lead to duplicate names.
@@ -150,6 +158,102 @@ fun processTabClick(x: Double, y: Double): Boolean {
         EditorState.selectedUniverse = universe
     }
     return true
+}
+
+// --- Renaming -------------------------------------------------------------------------------
+
+/** Two clicks on a tab's name closer together than this, in ms, rename it. */
+private const val DOUBLE_CLICK_MS = 400.0
+
+/** The longest a universe's name can be. */
+private const val MAX_NAME_LENGTH = 30
+
+/** The narrowest the name box is, in px, so there's room to type even into a short name. */
+private const val MIN_RENAME_WIDTH = 140.0
+
+private var lastNameClick: Universe? = null
+private var lastNameClickAt = Double.NEGATIVE_INFINITY
+
+/** The universe whose name was just double-clicked: releasing over its tab starts renaming it. */
+private var renamePressed: Universe? = null
+
+/** The text box over the tab being renamed, and its universe, or null. */
+private var renameInput: HTMLInputElement? = null
+private var renaming: Universe? = null
+
+/**
+ * Starts renaming if a tab's name was double-clicked and is released over it. Not on the
+ * press itself: the press's own default action would take the focus straight back.
+ */
+fun processTabRelease(x: Double, y: Double) {
+    val universe = renamePressed ?: return
+    renamePressed = null
+    val ctx = CanvasState.ctx ?: return
+    val tab = layoutTabs(ctx).firstOrNull { it.universe === universe && it.contains(x, y) } ?: return
+    startRenaming(universe, tab)
+}
+
+/** Puts a text box over [tab] holding [universe]'s name, all selected so typing replaces it. */
+private fun startRenaming(universe: Universe, tab: Tab) {
+    finishRenaming(apply = true)
+    val input = document.createElement("input") as HTMLInputElement
+    input.type = "text"
+    input.maxLength = MAX_NAME_LENGTH
+    input.value = universe.name
+    input.setAttribute("aria-label", "Universe name")
+    input.style.apply {
+        position = "fixed"
+        boxSizing = "border-box"
+        margin = "0"
+        padding = "0 ${TAB_PADDING}px"
+        border = "none"
+        outline = "none"
+        borderRadius = "${TAB_RADIUS}px"
+        background = TABS_HOVERED_COLOR
+        color = SELECTED_TEXT_COLOR
+        font = TAB_FONT
+    }
+    placeOver(input, tab)
+    input.onkeydown = { e ->
+        when (e.key) {
+            "Enter" -> finishRenaming(apply = true)
+            "Escape" -> finishRenaming(apply = false)
+        }
+    }
+    // Clicking anywhere else keeps the new name too.
+    input.onblur = { if (renameInput === input) finishRenaming(apply = true) }
+    renameInput = input
+    renaming = universe
+    document.body?.appendChild(input)
+    input.focus()
+    input.select()
+}
+
+/** Closes the name box, renaming the universe to what was typed if [apply] (and it isn't blank). */
+private fun finishRenaming(apply: Boolean) {
+    val input = renameInput ?: return
+    val universe = renaming
+    renameInput = null  // first, so removing it (which blurs it) doesn't finish twice
+    renaming = null
+    val name = input.value.trim()
+    if (apply && universe != null && name.isNotEmpty()) universe.name = name
+    input.remove()
+}
+
+/** Keeps the name box over its tab, e.g. as tabs to its left change width. Called every frame. */
+fun placeRenameInput() {
+    val input = renameInput ?: return
+    val ctx = CanvasState.ctx ?: return
+    val tab = layoutTabs(ctx).firstOrNull { it.universe === renaming }
+    // Its universe was closed (e.g. by opening a song): nothing left to rename.
+    if (tab == null) finishRenaming(apply = false) else placeOver(input, tab)
+}
+
+private fun placeOver(input: HTMLInputElement, tab: Tab) {
+    input.style.left = "${tab.x}px"
+    input.style.top = "${TAB_Y}px"
+    input.style.width = "${maxOf(tab.width, MIN_RENAME_WIDTH)}px"
+    input.style.height = "${TAB_HEIGHT}px"
 }
 
 /** Removes [universe]. If it was selected, its right neighbour (or left, if it was last) is selected. */

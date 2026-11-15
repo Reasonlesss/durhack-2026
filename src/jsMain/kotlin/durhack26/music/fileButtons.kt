@@ -8,9 +8,9 @@ import org.w3c.dom.LEFT
 import org.w3c.dom.MIDDLE
 
 /*
- * The Open / Save buttons, in a box in the bottom-right corner (clear of the sidebar),
- * styled like the top bar. Ctrl+O and Ctrl+S do the same (see editor.kt). See songFile.kt
- * for what they do.
+ * The Help / Open / Save buttons, in a box in the bottom-right corner (clear of the sidebar),
+ * styled like the top bar. ?, Ctrl+O and Ctrl+S do the same (see editor.kt). See help.kt and
+ * songFile.kt for what they do.
  *
  * A button acts when it's released, not pressed: browsers only let a touch or pen open a
  * file dialog on release (a mouse can do either).
@@ -33,6 +33,7 @@ private const val ITEM_PADDING = 12.0   // either side of a button's label
 private class FileButton(val label: String, val action: () -> Unit)
 
 private val buttons = listOf(
+    FileButton("Help", ::showHelp),
     FileButton("Open", ::openSong),
     FileButton("Save", ::saveSong),
 )

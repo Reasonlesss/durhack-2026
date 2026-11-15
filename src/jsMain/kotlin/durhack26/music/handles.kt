@@ -36,14 +36,17 @@ fun Effect.handlePosition(handle: EffectHandle): Pair<Double, Double> {
         y + localX * sin(rotation) + localY * cos(rotation)
 }
 
-/** What [handle] controls on this effect, or null if its type opted out of it. */
+/**
+ * What [handle] changes about how this effect sounds, or null for the scale handle: resizing
+ * only changes which notes are inside it.
+ */
 fun Effect.control(handle: EffectHandle): EffectControl? = when (handle) {
     EffectHandle.ROTATE -> type.rotationControl
-    EffectHandle.SCALE -> type.scaleControl
+    EffectHandle.SCALE -> null
 }
 
-/** The handles this effect has: only the ones its type uses. */
-fun Effect.handles(): List<EffectHandle> = EffectHandle.entries.filter { control(it) != null }
+/** The handles this effect has: every effect can be turned and resized. */
+fun Effect.handles(): List<EffectHandle> = EffectHandle.entries
 
 /** The handle of [this] effect at world point (px, py), or null. */
 fun Effect.handleAt(px: Double, py: Double): EffectHandle? = handles().firstOrNull {
@@ -85,7 +88,6 @@ fun renderEffectHandles(ctx: CanvasRenderingContext2D, universe: Universe) {
 
     val params = universe.timeline.paramsOf(effect)
     for (handle in effect.handles()) {
-        val control = effect.control(handle) ?: continue
         val (hx, hy) = effect.handlePosition(handle)
         ctx.beginPath()
         ctx.arc(hx - camX, hy - camY, HANDLE_RADIUS, 0.0, 2 * PI)
@@ -94,8 +96,9 @@ fun renderEffectHandles(ctx: CanvasRenderingContext2D, universe: Universe) {
         ctx.strokeStyle = HANDLE_LINE_COLOR
         ctx.stroke()
 
-        // What this handle changes and its current value, e.g. "Room size 4.2s".
-        val value = params?.let { if (handle == EffectHandle.ROTATE) it.turn else it.amount }
+        // What this handle changes and its current value, e.g. "Room size 4.5s".
+        val control = effect.control(handle) ?: continue
+        val value = params?.turn
         val label = if (value == null) control.label else "${control.label} ${control.describe(value)}"
         ctx.font = LABEL_FONT
         ctx.textBaseline = CanvasTextBaseline.MIDDLE

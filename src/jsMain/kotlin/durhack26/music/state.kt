@@ -28,6 +28,21 @@ object EditorState {
      */
     var key = 0
 
+    /**
+     * True for "No key": every note of the chromatic scale from C, whatever the mood. Picking
+     * a mood or a key turns it off again. See levels.kt.
+     */
+    var noKey = false
+
+    /** Whether the Advanced box in the bottom-left corner is ticked: shows importing presets and samples. */
+    var advanced = false
+
+    /**
+     * Presets and samples imported this session (see imports.kt), offered in the instrument
+     * dropdown of every universe alongside the built-in types.
+     */
+    val importedSounds = mutableListOf<ImportedSound>()
+
     /** All open universes, in tab order. */
     val universes = mutableListOf(
         Universe("Universe 1"),
@@ -61,7 +76,7 @@ object EditorState {
      * The note being placed, as (type, level), or null: the instrument being dragged, or
      * the new one an edge would make if it were dropped on empty canvas right now.
      */
-    fun placingNote(): Pair<InstrumentType, Int>? {
+    fun placingNote(): Pair<SoundType, Int>? {
         (dragging as? Instrument)?.let { return it.type to it.level }
         val from = linkingFrom ?: return null
         val worldX = pointerX + selectedUniverse.cameraX
@@ -145,7 +160,7 @@ class Universe(var name: String, var enabled: Boolean = true) {
      * Instruments added to this universe's toolbar, in order, keyed by the shape their
      * instances are drawn as. Shapes are unique, so there are at most eight; types can repeat.
      */
-    val instrumentTypes = mutableMapOf<InstrumentShape, InstrumentType>()
+    val instrumentTypes = mutableMapOf<InstrumentShape, SoundType>()
 
     /** Instrument instances in this universe, shown on the canvas. */
     val instruments = mutableListOf<Instrument>()
@@ -179,11 +194,11 @@ class Universe(var name: String, var enabled: Boolean = true) {
         InstrumentShape.entries.firstOrNull { it !in instrumentTypes }
 
     /** Types that can be added to the sidebar: all of them, until every shape is taken. */
-    fun availableInstrumentTypes(): List<InstrumentType> =
-        if (nextInstrumentShape() == null) emptyList() else InstrumentType.entries
+    fun availableInstrumentTypes(): List<SoundType> =
+        if (nextInstrumentShape() == null) emptyList() else allSoundTypes()
 
     /** Switches the sidebar instrument drawn as [shape], and all its instances, to [type]. */
-    fun changeInstrumentType(shape: InstrumentShape, type: InstrumentType) {
+    fun changeInstrumentType(shape: InstrumentShape, type: SoundType) {
         instrumentTypes[shape] = type
         instruments.filter { it.shape == shape }.forEach { it.type = type }
         markChanged()
@@ -204,6 +219,12 @@ class Universe(var name: String, var enabled: Boolean = true) {
 
     /** The topmost edge within reach of world point (x, y), or null. */
     fun edgeAt(x: Double, y: Double): Edge? = edges.lastOrNull { it.isNear(x, y) }
+
+    /** Removes [edge], leaving the instruments at both ends where they are. */
+    fun removeEdge(edge: Edge) {
+        edges.remove(edge)
+        markChanged()
+    }
 
     /**
      * Draws an edge from [from] to [to]. Drawing an edge that already exists deletes it;
@@ -226,13 +247,22 @@ interface Movable {
 /** A point in a universe. [id] is its key in [Universe.nodes]. */
 class Node(val id: Int, var x: Double, var y: Double)
 
-/** An instrument placed in a universe. [shape] is its type's shape in that universe. */
+/**
+ * An instrument placed in a universe. [shape] is its type's shape in that universe.
+ * [volume] is how loud this one note is, from 0 (silent) to 1 (full): hold it and scroll.
+ */
 class Instrument(
-    var type: InstrumentType,
+    var type: SoundType,
     val shape: InstrumentShape,
     override var x: Double,
     override var y: Double,
+    volume: Double = 1.0,
 ) : Movable {
+    var volume = volume.coerceIn(0.0, 1.0)
+        set(value) {
+            field = value.coerceIn(0.0, 1.0)
+        }
+
     /** When this was last heard, on the `performance.now()` clock in ms. Drives its pulse. */
     var lastPlayedAt = Double.NEGATIVE_INFINITY
 

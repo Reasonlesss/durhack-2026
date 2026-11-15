@@ -1,7 +1,5 @@
 package durhack26.music
 
-import kotlin.math.hypot
-
 /*
  * The timeline: which notes play when, and what effects they go through.
  *
@@ -19,16 +17,10 @@ const val TICKS_PER_BEAT = 24
 const val TIMELINE_BEATS = 16
 
 /**
- * An effect as applied to notes.
- * - [excess]: how much room the shape has to spare, in world pixels: the distance from its
- *   centre to the nearest point of its outline, minus the distance to the furthest note
- *   inside it. 0 when the notes reach past that nearest point (e.g. into a corner).
- * - [rotation]: the effect's rotation in radians, in 0 until 2π.
+ * An effect as applied to notes. Only its [rotation] (in radians, in 0 until 2π) changes how
+ * it sounds; its size only decides which notes are inside it.
  */
-class EffectParams(val effect: Effect, val excess: Double, val rotation: Double) {
-    /** The excess as a fraction of the inner radius, 0..1. More room = stronger effect. */
-    val amount get() = (excess / effect.innerRadius).coerceIn(0.0, 1.0)
-
+class EffectParams(val effect: Effect, val rotation: Double) {
     /** The rotation as a fraction of a full turn, 0..1. */
     val turn get() = rotation / (2 * kotlin.math.PI)
 }
@@ -57,7 +49,7 @@ fun buildTimeline(universe: Universe): Timeline {
     val notesInside = universe.effects.associateWith { effect ->
         universe.instruments.filter { effect.contains(it.x, it.y) }
     }
-    val params = effectParams(notesInside)
+    val params = universe.effects.associateWith { EffectParams(it, it.rotation.mod(2 * kotlin.math.PI)) }
     val effectsByNote = effectsByNote(universe, notesInside, params)
 
     val outgoing = universe.edges.groupBy { it.from }
@@ -79,17 +71,6 @@ fun buildTimeline(universe: Universe): Timeline {
     }
     return Timeline(events.sortedBy { it.tick }, params)
 }
-
-/** Each effect's parameters, from the notes inside it. See [EffectParams]. */
-private fun effectParams(notesInside: Map<Effect, List<Instrument>>): Map<Effect, EffectParams> =
-    notesInside.mapValues { (effect, notes) ->
-        val furthest = notes.maxOfOrNull { hypot(it.x - effect.x, it.y - effect.y) } ?: 0.0
-        EffectParams(
-            effect = effect,
-            excess = (effect.innerRadius - furthest).coerceAtLeast(0.0),
-            rotation = effect.rotation.mod(2 * kotlin.math.PI),
-        )
-    }
 
 /**
  * For each note, the effects it's inside, smallest first: an effect that encloses another

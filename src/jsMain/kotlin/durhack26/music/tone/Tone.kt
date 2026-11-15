@@ -3,6 +3,7 @@
 
 package durhack26.music.tone
 
+import org.khronos.webgl.ArrayBuffer
 import kotlin.js.Promise
 
 /*
@@ -20,7 +21,13 @@ external fun now(): Double
 external fun setContext(context: Context, disposeOld: Boolean = definedExternally)
 
 /** Tone.js's wrapper around an AudioContext: adds scheduling ([lookAhead]) on top. */
-external class Context(options: dynamic)
+external class Context(options: dynamic) {
+    /** Decodes an audio file's bytes (WAV, MP3, OGG, FLAC: whatever the browser can play) into an AudioBuffer. */
+    fun decodeAudioData(audioData: ArrayBuffer): Promise<dynamic>
+}
+
+/** The context every Tone.js node uses (the one [setContext] set). */
+external fun getContext(): Context
 
 /** The shared clock that repeating callbacks are scheduled on. */
 external fun getTransport(): Transport
@@ -59,6 +66,9 @@ external class MonoSynth(options: dynamic = definedExternally) : ToneAudioNode
 external class PluckSynth(options: dynamic = definedExternally) : ToneAudioNode
 external class FMSynth(options: dynamic = definedExternally) : ToneAudioNode
 external class DuoSynth(options: dynamic = definedExternally) : ToneAudioNode
+
+/** Plays audio samples, repitched to whatever note is asked for. `urls` can map notes to AudioBuffers. */
+external class Sampler(options: dynamic = definedExternally) : ToneAudioNode
 
 external class Reverb(options: dynamic = definedExternally) : ToneAudioNode
 external class FeedbackDelay(options: dynamic = definedExternally) : ToneAudioNode

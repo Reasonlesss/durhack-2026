@@ -1,6 +1,8 @@
 package durhack26.music
 
+import kotlinx.browser.document
 import kotlinx.browser.window
+import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.CanvasRenderingContext2D
 import org.w3c.dom.CanvasTextAlign
 import org.w3c.dom.CanvasTextBaseline
@@ -17,6 +19,7 @@ import org.w3c.dom.CanvasLineCap
  *
  * − and + nudge the tempo by 1 BPM, and the mouse wheel over the box does the same. Tap
  * (or the T key) sets it from the gaps between taps: tap along to a beat, and it follows.
+ * Clicking the number lets you type one: Enter (or clicking away) sets it, Escape cancels.
  */
 
 private const val BOX_COLOR = ZINC_900
@@ -99,6 +102,12 @@ fun renderTempo(ctx: CanvasRenderingContext2D) {
     ctx.fillStyle = if (flashing || tapHovered) HOVERED_TEXT_COLOR else TEXT_COLOR
     ctx.fillText("Tap", l.tap.x + l.tap.width / 2, midY)
 
+    // The number is clickable, to type a tempo: it lights up on hover like the buttons.
+    if (l.number.contains(px, py) && bpmInput == null) {
+        ctx.fillRoundedRect(l.number.x, l.number.y, l.number.width, l.number.height, ITEM_RADIUS, HOVERED_COLOR)
+    }
+    bpmInput?.let { placeOver(it, l.number) }
+
     // "124" bright and " BPM" dim, centred together.
     val number = EditorState.bpm.toString()
     val numberWidth = ctx.measureText(number).width
@@ -141,6 +150,8 @@ fun processTempoClick(x: Double, y: Double): Boolean {
         l.minus.contains(x, y) -> setBpm(EditorState.bpm - 1.0)
         l.plus.contains(x, y) -> setBpm(EditorState.bpm + 1.0)
         l.tap.contains(x, y) -> tapTempo()
+        // Opened on release: the press's own default action would take the focus straight back.
+        l.number.contains(x, y) -> numberPressed = true
         else -> return l.box.contains(x, y)
     }
     return true
@@ -189,4 +200,82 @@ fun tapTempo() {
     if (taps.size < 2) return
     val averageGapMs = (taps.last() - taps.first()) / (taps.size - 1)
     if (averageGapMs > 0) setBpm(60_000.0 / averageGapMs)
+}
+
+// --- Typing a tempo -------------------------------------------------------------------------
+
+/** The text box over the number while a tempo is being typed, or null. */
+private var bpmInput: HTMLInputElement? = null
+
+/** True while the number is being pressed: releasing over it starts typing. */
+private var numberPressed = false
+
+/** Starts typing a tempo if the number was pressed and is released over itself. */
+fun processTempoRelease(x: Double, y: Double) {
+    if (!numberPressed) return
+    numberPressed = false
+    val ctx = CanvasState.ctx ?: return
+    val number = layout(ctx).number
+    if (number.contains(x, y)) startTypingBpm(number)
+}
+
+/**
+ * Puts a text box over the number, holding the current tempo, all selected so typing replaces
+ * it. It's a real `<input>`, so phones show their keyboard and pasting works.
+ */
+private fun startTypingBpm(over: Rect) {
+    if (bpmInput != null) return
+    val input = document.createElement("input") as HTMLInputElement
+    input.type = "text"
+    input.setAttribute("inputmode", "numeric")
+    input.setAttribute("aria-label", "Tempo in BPM")
+    input.maxLength = 3
+    input.value = EditorState.bpm.toString()
+    input.style.apply {
+        position = "fixed"
+        boxSizing = "border-box"
+        margin = "0"
+        padding = "0"
+        border = "none"
+        outline = "none"
+        borderRadius = "${ITEM_RADIUS}px"
+        background = HOVERED_COLOR
+        color = NUMBER_COLOR
+        font = FONT
+        textAlign = "center"
+    }
+    placeOver(input, over)
+    // Digits only.
+    input.oninput = {
+        val digits = input.value.filter { it.isDigit() }
+        if (digits != input.value) input.value = digits
+    }
+    input.onkeydown = { e ->
+        when (e.key) {
+            "Enter" -> finishTypingBpm(apply = true)
+            "Escape" -> finishTypingBpm(apply = false)
+        }
+    }
+    // Clicking anywhere else sets it too.
+    input.onblur = { if (bpmInput === input) finishTypingBpm(apply = true) }
+    bpmInput = input
+    document.body?.appendChild(input)
+    input.focus()
+    input.select()
+}
+
+/** Closes the text box, setting the tempo to what was typed if [apply] (and it's a number). */
+private fun finishTypingBpm(apply: Boolean) {
+    val input = bpmInput ?: return
+    bpmInput = null  // first, so removing it (which blurs it) doesn't finish twice
+    if (apply) input.value.toIntOrNull()?.let { setBpm(it.toDouble()) }  // kept within MIN_BPM..MAX_BPM
+    input.remove()
+}
+
+/** Keeps the text box exactly over [r], e.g. when the window resizes or the scale picker's width changes. */
+private fun placeOver(input: HTMLInputElement, r: Rect) {
+    input.style.left = "${r.x}px"
+    input.style.top = "${r.y}px"
+    input.style.width = "${r.width}px"
+    input.style.height = "${r.height}px"
 }

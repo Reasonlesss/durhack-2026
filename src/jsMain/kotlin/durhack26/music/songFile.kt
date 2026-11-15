@@ -19,22 +19,33 @@ import kotlin.js.json
  *
  *   {
  *     "format": "durhack-music", "version": 1,
- *     "bpm": 124, "scale": "SAD", "key": 0, "selectedUniverse": 0,
+ *     "bpm": 124, "scale": "SAD", "key": 0, "noKey": false, "selectedUniverse": 0,
  *     "universes": [{
  *       "name": "Drums", "enabled": true, "cameraX": 0, "cameraY": -400,
  *       "instrumentTypes": [{ "shape": "CIRCLE", "type": "DRUMS" }],
- *       "instruments": [{ "type": "DRUMS", "shape": "CIRCLE", "x": 200, "y": -336 }, …],
+ *       "instruments": [{ "type": "DRUMS", "shape": "CIRCLE", "x": 200, "y": -336, "volume": 1 }, …],
  *       "edges": [{ "from": 0, "to": 1, "segments": 2 }, …],
  *       "effects": [{ "type": "REVERB", "x": 612, "y": -768, "rotation": 0, "scale": 12 }]
  *     }, …]
  *   }
+ *
+ * "noKey" and "volume" were added later, so files without them still open (as a key, and at
+ * full volume). Imported presets and samples (see imports.kt) are saved in an "imported"
+ * list, and instruments playing one have the type "import:" plus its index there, e.g.
+ * "import:0". Files with any are version 2, which older versions of the app won't open.
  *
  * Opening a file checks all of it before anything changes, so a bad file leaves the
  * current song as it was.
  */
 
 private const val FORMAT = "durhack-music"
-private const val VERSION = 1
+private const val VERSION = 2
+
+/** The version of files with no imported sounds: older versions of the app can still open those. */
+private const val VERSION_WITHOUT_IMPORTS = 1
+
+/** How an instrument playing the imported sound at [index] is typed in a song file. */
+private const val IMPORT_PREFIX = "import:"
 private const val MIME_TYPE = "application/json"
 private const val EXTENSION = ".json"
 
@@ -45,16 +56,26 @@ private var fileName = "song$EXTENSION"
 
 /** The whole song as song-file JSON. */
 fun songToJson(): String {
+    val imported = EditorState.importedSounds
     val song = json(
         "format" to FORMAT,
-        "version" to VERSION,
+        "version" to if (imported.isEmpty()) VERSION_WITHOUT_IMPORTS else VERSION,
         "bpm" to EditorState.bpm,
         "scale" to EditorState.scale.name,
         "key" to EditorState.key,
+        "noKey" to EditorState.noKey,
         "selectedUniverse" to EditorState.universes.indexOf(EditorState.selectedUniverse),
         "universes" to EditorState.universes.map(::universeToJson).toTypedArray(),
     )
+    if (imported.isNotEmpty()) song["imported"] = imported.map { it.toJson() }.toTypedArray()
     return js("JSON.stringify(song, null, 2)") as String
+}
+
+/** How [type] is named in a song file: its enum name, or [IMPORT_PREFIX] and its index if imported. */
+private fun typeName(type: SoundType): String = when (type) {
+    is InstrumentType -> type.name
+    is ImportedSound -> IMPORT_PREFIX + EditorState.importedSounds.indexOf(type)
+    else -> error("unknown instrument type $type")
 }
 
 private fun universeToJson(universe: Universe) = json(
@@ -63,10 +84,10 @@ private fun universeToJson(universe: Universe) = json(
     "cameraX" to universe.cameraX,
     "cameraY" to universe.cameraY,
     "instrumentTypes" to universe.instrumentTypes.map { (shape, type) ->
-        json("shape" to shape.name, "type" to type.name)
+        json("shape" to shape.name, "type" to typeName(type))
     }.toTypedArray(),
     "instruments" to universe.instruments.map {
-        json("type" to it.type.name, "shape" to it.shape.name, "x" to it.x, "y" to it.y)
+        json("type" to typeName(it.type), "shape" to it.shape.name, "x" to it.x, "y" to it.y, "volume" to it.volume)
     }.toTypedArray(),
     "edges" to universe.edges.map {
         json(
@@ -184,7 +205,14 @@ fun loadSong(text: String) {
     val scale = enumField<Scale>(song, "scale")
     val key = int(song, "key")
     if (key !in 0 until KEY_COUNT) throw SongFileError("its key is out of range")
-    val loaded = list(song, "universes").map(::universeFromJson)
+    val noKey = if (song.noKey == null) false else boolean(song, "noKey")
+    // Imported sounds come first: instruments refer to them. One that's already been imported
+    // (e.g. opening the same song again) is shared rather than added twice.
+    val imported = if (song.imported == null) emptyList() else list(song, "imported").map { entry ->
+        val text = JSON.stringify(entry)
+        EditorState.importedSounds.firstOrNull { JSON.stringify(it.toJson()) == text } ?: importedSoundFromJson(entry)
+    }
+    val loaded = list(song, "universes").map { universeFromJson(it, imported) }
     if (loaded.isEmpty()) throw SongFileError("it has no universes")
     val selected = int(song, "selectedUniverse")
 
@@ -192,6 +220,9 @@ fun loadSong(text: String) {
     if (EditorState.playing) togglePlayback()
     EditorState.scale = scale
     EditorState.key = key
+    EditorState.noKey = noKey
+    // Added to (not replacing) the ones already imported, which stay available.
+    EditorState.importedSounds += imported.filter { it !in EditorState.importedSounds }
     setBpm(bpm.toDouble())
     EditorState.universes.clear()
     EditorState.universes += loaded.map { it.first }
@@ -216,19 +247,23 @@ private fun resetEditing() {
     resetTapTempo()
 }
 
-/** A universe from a song file, and the (x, y) to scroll it to once the scale is set. */
-private fun universeFromJson(json: dynamic): Pair<Universe, Pair<Double, Double>> {
+/**
+ * A universe from a song file, and the (x, y) to scroll it to once the scale is set.
+ * [imported] is the file's imported sounds, which instruments can refer to by index.
+ */
+private fun universeFromJson(json: dynamic, imported: List<ImportedSound>): Pair<Universe, Pair<Double, Double>> {
     val universe = Universe(string(json, "name"), boolean(json, "enabled"))
 
     for (entry in list(json, "instrumentTypes")) {
-        universe.instrumentTypes[enumField<InstrumentShape>(entry, "shape")] = enumField<InstrumentType>(entry, "type")
+        universe.instrumentTypes[enumField<InstrumentShape>(entry, "shape")] = soundType(entry, imported)
     }
     for (entry in list(json, "instruments")) {
         val shape = enumField<InstrumentShape>(entry, "shape")
         // Every note's shape has to be in the sidebar, or it couldn't be changed or removed;
         // and every note plays its shape's sidebar type, as the editor keeps it.
-        val type = universe.instrumentTypes.getOrPut(shape) { enumField<InstrumentType>(entry, "type") }
-        universe.instruments += Instrument(type, shape, number(entry, "x"), number(entry, "y"))
+        val type = universe.instrumentTypes.getOrPut(shape) { soundType(entry, imported) }
+        val volume = if (entry.volume == null) 1.0 else number(entry, "volume")
+        universe.instruments += Instrument(type, shape, number(entry, "x"), number(entry, "y"), volume)
     }
     for (entry in list(json, "edges")) {
         val from = universe.instruments.getOrNull(int(entry, "from"))
@@ -254,6 +289,16 @@ private fun universeFromJson(json: dynamic): Pair<Universe, Pair<Double, Double>
         )
     }
     return universe to (number(json, "cameraX") to number(json, "cameraY"))
+}
+
+/** An entry's "type": a built-in type's name, or [IMPORT_PREFIX] and an index into [imported]. */
+private fun soundType(entry: dynamic, imported: List<ImportedSound>): SoundType {
+    val name = string(entry, "type")
+    if (name.startsWith(IMPORT_PREFIX)) {
+        return name.removePrefix(IMPORT_PREFIX).toIntOrNull()?.let { imported.getOrNull(it) }
+            ?: throw SongFileError("it has an instrument playing an imported sound that isn't in it")
+    }
+    return enumField<InstrumentType>(entry, "type")
 }
 
 // --- Reading fields, with errors that say what's wrong --------------------------------------

@@ -14,6 +14,8 @@ import kotlin.math.roundToInt
  * through the kit, one drum per level (see DrumSound).
  *
  * Level 0 is the bottom (e.g. C3) and sits at world y = 0; levels go up (negative y) from there.
+ *
+ * "No key" (EditorState.noKey) ignores the mood and key: every semitone from C3 to C6.
  */
 
 const val LEVEL_HEIGHT = 48.0
@@ -47,7 +49,11 @@ enum class Scale(val label: String, val semitones: List<Int>) {
     val levelCount get() = OCTAVES * semitones.size + 1
 }
 
-private val scale get() = EditorState.scale
+/** The scale the levels follow: the mood's, or every semitone when there's no key. */
+private val scale get() = if (EditorState.noKey) Scale.CHAOTIC else EditorState.scale
+
+/** Semitones the levels are moved up by: the key's, or none (from C) when there's no key. */
+private val keyOffset get() = if (EditorState.noKey) 0 else EditorState.key
 
 /** World y of [level]. */
 fun levelY(level: Int) = -level * LEVEL_HEIGHT
@@ -66,7 +72,7 @@ fun isLevel(level: Int) = level in 0 until scale.levelCount
 private fun midiOf(level: Int, octaveShift: Int): Int {
     val perOctave = scale.semitones.size
     val octave = LOWEST_OCTAVE + level / perOctave + octaveShift
-    return 12 * (octave + 1) + EditorState.key + scale.semitones[level % perOctave]
+    return 12 * (octave + 1) + keyOffset + scale.semitones[level % perOctave]
 }
 
 /** E.g. "E4" or "F#3". [octaveShift] moves it by whole octaves. */

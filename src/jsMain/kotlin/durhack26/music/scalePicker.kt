@@ -15,7 +15,8 @@ import kotlin.math.max
 /*
  * The scale picker: a button just left of the play button showing the current mood (and
  * key, if it isn't C). Clicking it opens a dropdown below it: every mood, then an advanced
- * "Key" row that opens a grid of the 12 keys. Styled like the tab box.
+ * "Key" row that opens a grid of the 12 keys, and "No key" under them: every semitone from
+ * C, whatever the mood (see levels.kt). Styled like the tab box.
  *
  *   ┌────────────┐
  *   │ Happy      │
@@ -26,6 +27,7 @@ import kotlin.math.max
  *   │ C  C# D  D#│
  *   │ E  F  F# G │
  *   │ G# A  A# B │
+ *   │   No key   │
  *   └────────────┘
  */
 
@@ -61,7 +63,14 @@ private const val KEY_GAP = 4.0
 private var keysOpen = false
 
 private class ScaleRow(val scale: Scale, val bounds: Rect)
-private class KeyCell(val key: Int, val bounds: Rect)
+/** A key in the grid, or "No key" when [key] is [NO_KEY_CELL]. */
+private class KeyCell(val key: Int, val bounds: Rect) {
+    val label get() = if (key == NO_KEY_CELL) NO_KEY_LABEL else keyName(key)
+    val selected get() = if (key == NO_KEY_CELL) EditorState.noKey else !EditorState.noKey && key == EditorState.key
+}
+
+private const val NO_KEY_CELL = -1
+private const val NO_KEY_LABEL = "No key"
 
 private class ScaleMenu(
     val box: Rect,
@@ -72,9 +81,12 @@ private class ScaleMenu(
     val keys: List<KeyCell>,
 )
 
-/** What the button says: the mood, plus the key unless it's C (the default). */
-private fun buttonLabel() =
-    if (EditorState.key == 0) EditorState.scale.label else "${EditorState.scale.label} · ${keyName(EditorState.key)}"
+/** What the button says: the mood, plus the key unless it's C (the default); or "No key". */
+private fun buttonLabel() = when {
+    EditorState.noKey -> NO_KEY_LABEL
+    EditorState.key == 0 -> EditorState.scale.label
+    else -> "${EditorState.scale.label} · ${keyName(EditorState.key)}"
+}
 
 private fun buttonBounds(ctx: CanvasRenderingContext2D): Rect {
     ctx.font = FONT
@@ -89,7 +101,7 @@ private fun layoutMenu(ctx: CanvasRenderingContext2D): ScaleMenu? {
     val button = buttonBounds(ctx)
     ctx.font = FONT
     val moodWidth = Scale.entries.maxOf { ctx.measureText(it.label).width } + TEXT_PADDING * 2
-    val keyRowWidth = ctx.measureText("Key ${keyName(1)}").width + TEXT_PADDING * 3 + CHEVRON_GAP + CHEVRON_SIZE
+    val keyRowWidth = ctx.measureText("Key $NO_KEY_LABEL").width + TEXT_PADDING * 3 + CHEVRON_GAP + CHEVRON_SIZE
     val gridWidth = KEY_MIN_WIDTH * KEY_COLUMNS + KEY_GAP * (KEY_COLUMNS - 1)
     val rowWidth = max(max(moodWidth, keyRowWidth), gridWidth)
     val width = rowWidth + PADDING * 2
@@ -112,11 +124,16 @@ private fun layoutMenu(ctx: CanvasRenderingContext2D): ScaleMenu? {
         val cellWidth = (rowWidth - KEY_GAP * (KEY_COLUMNS - 1)) / KEY_COLUMNS
         val gridTop = y
         y += KEY_ROWS * KEY_HEIGHT + (KEY_ROWS - 1) * KEY_GAP
-        (0 until KEY_COUNT).map { key ->
+        val keys = (0 until KEY_COUNT).map { key ->
             val column = key % KEY_COLUMNS
             val row = key / KEY_COLUMNS
             KeyCell(key, Rect(left + column * (cellWidth + KEY_GAP), gridTop + row * (KEY_HEIGHT + KEY_GAP), cellWidth, KEY_HEIGHT))
         }
+        // "No key" runs the full width of the grid, under it.
+        y += KEY_GAP
+        val noKey = KeyCell(NO_KEY_CELL, Rect(left, y, rowWidth, KEY_HEIGHT))
+        y += KEY_HEIGHT
+        keys + noKey
     }
     return ScaleMenu(Rect(x, top, width, y + PADDING - top), rows, dividerY, keyRow, keys)
 }
@@ -154,7 +171,7 @@ fun renderScaleMenu(ctx: CanvasRenderingContext2D) {
         val hovered = r.contains(px, py)
         if (hovered) ctx.fillRoundedRect(r.x, r.y, r.width, r.height, ROW_RADIUS, HOVERED_COLOR)
         ctx.fillStyle = when {
-            row.scale == EditorState.scale -> SELECTED_TEXT_COLOR
+            row.scale == EditorState.scale && !EditorState.noKey -> SELECTED_TEXT_COLOR
             hovered -> HOVERED_TEXT_COLOR
             else -> TEXT_COLOR
         }
@@ -175,20 +192,20 @@ fun renderScaleMenu(ctx: CanvasRenderingContext2D) {
     val chevronX = r.x + r.width - TEXT_PADDING - CHEVRON_SIZE / 2
     ctx.textAlign = CanvasTextAlign.RIGHT
     ctx.fillStyle = SELECTED_TEXT_COLOR
-    ctx.fillText(keyName(EditorState.key), chevronX - CHEVRON_SIZE / 2 - CHEVRON_GAP, midY)
+    ctx.fillText(if (EditorState.noKey) "None" else keyName(EditorState.key), chevronX - CHEVRON_SIZE / 2 - CHEVRON_GAP, midY)
     ctx.textAlign = CanvasTextAlign.LEFT
     renderChevron(ctx, chevronX, midY, down = keysOpen, textColor)
 
     ctx.textAlign = CanvasTextAlign.CENTER
     for (cell in menu.keys) {
         val c = cell.bounds
-        val selected = cell.key == EditorState.key
+        val selected = cell.selected
         val hovered = c.contains(px, py)
         if (selected || hovered) {
             ctx.fillRoundedRect(c.x, c.y, c.width, c.height, ROW_RADIUS, if (selected) SELECTED_KEY_COLOR else HOVERED_COLOR)
         }
         ctx.fillStyle = if (selected || hovered) SELECTED_TEXT_COLOR else TEXT_COLOR
-        ctx.fillText(keyName(cell.key), c.x + c.width / 2, c.y + c.height / 2)
+        ctx.fillText(cell.label, c.x + c.width / 2, c.y + c.height / 2)
     }
     ctx.textAlign = CanvasTextAlign.LEFT
 }
@@ -233,9 +250,9 @@ fun processScalePickerClick(x: Double, y: Double): Boolean {
         val row = menu.rows.firstOrNull { it.bounds.contains(x, y) }
         if (row != null) {
             EditorState.scale = row.scale
+            EditorState.noKey = false
             EditorState.scaleMenuOpen = false
-            // The note range changed, so re-clamp every universe's camera to it.
-            EditorState.universes.forEach { it.panBy(0.0, 0.0) }
+            noteRangeChanged()
             return true
         }
         if (menu.keyRow.contains(x, y)) {
@@ -244,7 +261,13 @@ fun processScalePickerClick(x: Double, y: Double): Boolean {
         }
         val cell = menu.keys.firstOrNull { it.bounds.contains(x, y) }
         if (cell != null) {
-            EditorState.key = cell.key
+            if (cell.key == NO_KEY_CELL) {
+                EditorState.noKey = true
+            } else {
+                EditorState.key = cell.key
+                EditorState.noKey = false
+            }
+            noteRangeChanged()
             return true
         }
         // Between rows: still on the dropdown, so it stays open.
@@ -256,3 +279,6 @@ fun processScalePickerClick(x: Double, y: Double): Boolean {
     }
     return false
 }
+
+/** The number of levels may have changed (a new mood, or No key), so re-clamp every universe's camera to them. */
+private fun noteRangeChanged() = EditorState.universes.forEach { it.panBy(0.0, 0.0) }

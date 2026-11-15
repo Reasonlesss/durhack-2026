@@ -8,7 +8,8 @@ import org.w3c.dom.MIDDLE
  * The instrument dropdown, beside the toolbar row it was opened from. Types are grouped
  * into columns by category, each with a small heading. From +, picking one adds it; from
  * an instrument, picking one switches it (its current type is highlighted), and a Delete
- * row runs along the bottom. It's styled to match the toolbar.
+ * row runs along the bottom. Imported presets and samples get a column of their own once
+ * there are any (see imports.kt). It's styled to match the toolbar.
  */
 
 private const val BOX_COLOR = ZINC_900
@@ -29,6 +30,8 @@ private const val ROW_GAP = 4.0        // between neighbouring rows
 private const val COLUMN_GAP = 4.0     // between neighbouring columns
 private const val HEADING_HEIGHT = 24.0
 private const val MENU_GAP = 8.0       // between the toolbar and the dropdown
+private const val SCREEN_MARGIN = 20.0  // kept clear below the dropdown
+private const val MIN_ROWS_PER_COLUMN = 4
 
 private class Row(val label: String, val bounds: Rect, val current: Boolean = false, val onClick: () -> Unit)
 
@@ -42,10 +45,10 @@ private fun layoutInstrumentMenu(ctx: CanvasRenderingContext2D): Menu? {
     val editing = EditorState.editingShape
     val anchor = instrumentRowBounds(editing) ?: return null
 
-    val types = if (editing == null) universe.availableInstrumentTypes() else InstrumentType.entries
+    val types = if (editing == null) universe.availableInstrumentTypes() else allSoundTypes()
     if (types.isEmpty()) return null
     val current = editing?.let { universe.instrumentTypes[it] }
-    fun pick(type: InstrumentType) {
+    fun pick(type: SoundType) {
         if (editing == null) {
             universe.nextInstrumentShape()?.let { universe.instrumentTypes[it] = type }
         } else {
@@ -59,6 +62,10 @@ private fun layoutInstrumentMenu(ctx: CanvasRenderingContext2D): Menu? {
     val headings = mutableListOf<Heading>()
     var x = left + PADDING
     var bottom = top
+    // A long category (e.g. many imported presets) wraps into more columns, to stay on screen.
+    val deleteRow = if (editing != null) ROW_GAP + ROW_HEIGHT else 0.0
+    val roomForRows = CanvasState.height - SCREEN_MARGIN - top - PADDING * 2 - HEADING_HEIGHT - deleteRow + ROW_GAP
+    val maxRows = maxOf(MIN_ROWS_PER_COLUMN, (roomForRows / (ROW_HEIGHT + ROW_GAP)).toInt())
     for (category in InstrumentCategory.entries) {
         val inCategory = types.filter { it.category == category }
         if (inCategory.isEmpty()) continue
@@ -68,13 +75,15 @@ private fun layoutInstrumentMenu(ctx: CanvasRenderingContext2D): Menu? {
         val columnWidth = maxOf(width, ctx.measureText(category.label).width + ROW_PADDING * 2)
 
         headings += Heading(category.label, x + ROW_PADDING, top + PADDING + HEADING_HEIGHT / 2)
-        var y = top + PADDING + HEADING_HEIGHT
-        for (type in inCategory) {
-            rows += Row(type.label, Rect(x, y, columnWidth, ROW_HEIGHT), current = type == current) { pick(type) }
-            y += ROW_HEIGHT + ROW_GAP
+        for (column in inCategory.chunked(maxRows)) {
+            var y = top + PADDING + HEADING_HEIGHT
+            for (type in column) {
+                rows += Row(type.label, Rect(x, y, columnWidth, ROW_HEIGHT), current = type == current) { pick(type) }
+                y += ROW_HEIGHT + ROW_GAP
+            }
+            bottom = maxOf(bottom, y - ROW_GAP)
+            x += columnWidth + COLUMN_GAP
         }
-        bottom = maxOf(bottom, y - ROW_GAP)
-        x += columnWidth + COLUMN_GAP
     }
     val right = x - COLUMN_GAP
 
