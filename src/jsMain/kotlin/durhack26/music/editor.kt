@@ -19,6 +19,7 @@ fun render(ctx: CanvasRenderingContext2D) {
     renderScalePicker(ctx)
     renderTempo(ctx)
     renderToolbar(ctx)
+    renderFileButtons(ctx)
     renderInstrumentMenu(ctx)
     renderScaleMenu(ctx)
 }
@@ -52,6 +53,7 @@ private fun handlePointerDown(e: PointerEvent) {
         if (menuShown) return
         if (processScalePickerClick(e.offsetX, e.offsetY)) return
         if (processTempoClick(e.offsetX, e.offsetY)) return
+        if (processFileButtonsPress(e.offsetX, e.offsetY)) return
         if (processPlayButtonClick(e.offsetX, e.offsetY)) return
         if (processTabClick(e.offsetX, e.offsetY)) return
         if (processToolbarClick(e.offsetX, e.offsetY)) {
@@ -148,6 +150,7 @@ fun onPointerLeave(e: PointerEvent) {
 }
 
 fun onPointerUp(e: PointerEvent) {
+    processFileButtonsRelease(e.offsetX, e.offsetY)
     EditorState.panning = false
     processToolbarDrop(e.offsetX, e.offsetY)
 
@@ -174,10 +177,10 @@ fun onPointerUp(e: PointerEvent) {
     EditorState.selectedUniverse.markChanged()
 }
 
-/** Whether screen point (x, y) is over the sidebar, a dropdown, the play button, the scale picker or the tempo control. */
+/** Whether screen point (x, y) is over any of the UI: sidebar, dropdowns, top bar, or Open / Save. */
 private fun isOverUi(x: Double, y: Double) =
     isOverToolbar(x, y) || isOverInstrumentMenu(x, y) || isOverPlayButton(x, y) || isOverScalePicker(x, y) ||
-        isOverTempo(x, y)
+        isOverTempo(x, y) || isOverFileButtons(x, y)
 
 fun onWheel(e: WheelEvent) {
     // Line-based wheels (some mice) report lines rather than pixels.
@@ -197,6 +200,13 @@ fun onKeyDown(e: KeyboardEvent) {
     if (e.key == " " && !e.repeat) {
         e.preventDefault()
         togglePlayback()
+    }
+    // Ctrl+S saves, Ctrl+O opens (⌘ on a Mac), instead of the browser's own.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.repeat) {
+        when (e.key.lowercase()) {
+            "s" -> { e.preventDefault(); saveSong(); return }
+            "o" -> { e.preventDefault(); openSong(); return }
+        }
     }
     // T taps the tempo.
     if ((e.key == "t" || e.key == "T") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) tapTempo()
