@@ -186,8 +186,9 @@ fun onWheel(e: WheelEvent) {
     var dy = e.deltaY * unit
     // Shift + wheel scrolls sideways on mice without horizontal scrolling.
     if (e.shiftKey && dx == 0.0) { dx = dy; dy = 0.0 }
-    // Over the tempo, the wheel changes it instead of scrolling.
-    if (processTempoWheel(e.offsetX, e.offsetY, dy)) return
+    // Over the tempo, scrolling up or down changes it instead. Not sideways scrolling, and
+    // not ctrl + wheel, which is how trackpads report a pinch.
+    if (!e.ctrlKey && dy != 0.0 && processTempoWheel(e.offsetX, e.offsetY, dy)) return
     EditorState.selectedUniverse.panBy(dx, dy)
 }
 

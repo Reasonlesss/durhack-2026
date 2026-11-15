@@ -44,6 +44,8 @@ fun beatSeconds() = 60.0 / EditorState.bpm
 fun setBpm(bpm: Double) {
     EditorState.bpm = bpm.roundToInt().coerceIn(MIN_BPM, MAX_BPM)
     getTransport().bpm.value = EditorState.bpm
+    // Effects timed in beats change now, rather than when a note next plays through them.
+    chains.values.forEach(::retime)
 }
 
 /**
@@ -83,11 +85,11 @@ private const val RELEASE_SECONDS = 1.6
 private const val MAX_POLYPHONY = 8
 
 /**
- * How long a pool or chain is kept after it last played, in seconds. Longer than the longest
- * loop (at the slowest tempo), so one note per loop doesn't rebuild it every time; that also
+ * How long a pool or chain is kept after it last played, in seconds: longer than the longest
+ * loop at the current tempo, so one note per loop doesn't rebuild it every time; that also
  * lets tails ring out.
  */
-private const val IDLE_SECONDS = TIMELINE_BEATS * 60.0 / MIN_BPM + 5
+private fun idleSeconds() = TIMELINE_BEATS * beatSeconds() + 5
 
 /** The effects a note is inside, innermost first, each with the type it had when the chain was built. */
 private typealias ChainKey = List<Pair<Effect, EffectType>>
@@ -101,9 +103,6 @@ private class Chain(val key: ChainKey, val nodes: List<EffectNode>) {
 
     /** The (amount, turn) last applied to each effect, so unchanged ones aren't touched. */
     var applied: List<Pair<Double, Double>> = emptyList()
-
-    /** The tempo [applied] was for: some effects (delay, stutter) are timed in beats. */
-    var appliedBpm = 0
 
     fun dispose() = nodes.forEach { it.dispose() }
 }
@@ -253,13 +252,19 @@ private fun noteSeconds(duration: String) =
 /** Sets [chain]'s effects from [effects], skipping any that haven't changed. */
 private fun applyParams(chain: Chain, effects: List<EffectParams>) {
     val params = effects.map { it.amount to it.turn }
-    val tempoChanged = chain.appliedBpm != EditorState.bpm
-    if (params == chain.applied && !tempoChanged) return
+    if (params == chain.applied) return
     params.forEachIndexed { i, (amount, turn) ->
-        if (tempoChanged || chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
+        if (chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
     }
     chain.applied = params
-    chain.appliedBpm = EditorState.bpm
+}
+
+/** Re-applies [chain]'s tempo-dependent effects (delay, stutter) after a tempo change. */
+private fun retime(chain: Chain) {
+    chain.applied.forEachIndexed { i, (amount, turn) ->
+        val type = chain.key[i].second
+        if (type.tempoDependent) type.applyParams(chain.nodes[i], amount, turn)
+    }
 }
 
 /** The chain for [key], built if there isn't one yet, with one more user. Null for no effects. */
@@ -276,9 +281,10 @@ private fun acquire(key: ChainKey): Chain? {
     return chain
 }
 
-/** Disposes pools that haven't played for [IDLE_SECONDS], and any chain left with no pools. */
+/** Disposes pools that haven't played for [idleSeconds], and any chain left with no pools. */
 private fun disposeIdle(time: Double) {
-    val idle = pools.filterValues { time - it.lastUsed > IDLE_SECONDS }
+    val idleSeconds = idleSeconds()
+    val idle = pools.filterValues { time - it.lastUsed > idleSeconds }
     for ((key, pool) in idle) {
         pools.remove(key)
         pool.dispose()
