@@ -23,6 +23,8 @@ kotlin {
     sourceSets {
         jsMain.dependencies {
             implementation(npm("tone", "15.0.4"))
+            // Tone.js's own AudioContext wrapper; same version Tone.js resolves to, so there's one copy.
+            implementation(npm("standardized-audio-context", "25.3.77"))
         }
         jsTest.dependencies {
             implementation(kotlin("test"))
