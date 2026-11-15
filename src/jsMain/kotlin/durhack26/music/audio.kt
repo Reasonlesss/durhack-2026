@@ -9,6 +9,7 @@ import durhack26.music.tone.now
 import durhack26.music.tone.setContext
 import durhack26.music.tone.start
 import kotlinx.browser.window
+import kotlin.math.roundToInt
 
 /*
  * Plays every enabled universe's timeline with Tone.js.
@@ -29,9 +30,21 @@ import kotlinx.browser.window
  * What each instrument and effect sounds like is defined on InstrumentType and EffectType.
  */
 
-const val BPM = 124.0  // house tempo
-const val BEAT_SECONDS = 60.0 / BPM
-private const val TICK_SECONDS = BEAT_SECONDS / TICKS_PER_BEAT
+/** The slowest and fastest tempos allowed, in BPM. */
+const val MIN_BPM = 60
+const val MAX_BPM = 200
+
+/** How long a beat lasts at the current tempo, in seconds. */
+fun beatSeconds() = 60.0 / EditorState.bpm
+
+/**
+ * Sets the tempo, rounded to a whole BPM and kept within [MIN_BPM]..[MAX_BPM]. Playback
+ * follows straight away: the timeline is clocked in beats, not seconds.
+ */
+fun setBpm(bpm: Double) {
+    EditorState.bpm = bpm.roundToInt().coerceIn(MIN_BPM, MAX_BPM)
+    getTransport().bpm.value = EditorState.bpm
+}
 
 /**
  * The sample rate everything runs at. Browsers otherwise use the output device's, which
@@ -60,6 +73,7 @@ fun setupAudio() {
     options.lookAhead = LOOK_AHEAD_SECONDS
     // Closes the context Tone.js makes as soon as it's loaded, at the device's sample rate.
     setContext(Context(options), disposeOld = true)
+    getTransport().bpm.value = EditorState.bpm
 }
 
 /** How long a note is allowed to ring after it ends, in seconds, when its synth doesn't say. */
@@ -70,9 +84,10 @@ private const val MAX_POLYPHONY = 8
 
 /**
  * How long a pool or chain is kept after it last played, in seconds. Longer than the longest
- * loop, so one note per loop doesn't rebuild it every time; that also lets tails ring out.
+ * loop (at the slowest tempo), so one note per loop doesn't rebuild it every time; that also
+ * lets tails ring out.
  */
-private val IDLE_SECONDS = TIMELINE_BEATS * BEAT_SECONDS + 5
+private const val IDLE_SECONDS = TIMELINE_BEATS * 60.0 / MIN_BPM + 5
 
 /** The effects a note is inside, innermost first, each with the type it had when the chain was built. */
 private typealias ChainKey = List<Pair<Effect, EffectType>>
@@ -86,6 +101,9 @@ private class Chain(val key: ChainKey, val nodes: List<EffectNode>) {
 
     /** The (amount, turn) last applied to each effect, so unchanged ones aren't touched. */
     var applied: List<Pair<Double, Double>> = emptyList()
+
+    /** The tempo [applied] was for: some effects (delay, stutter) are timed in beats. */
+    var appliedBpm = 0
 
     fun dispose() = nodes.forEach { it.dispose() }
 }
@@ -147,7 +165,8 @@ private fun startPlayback() {
         if (!EditorState.playing || repeatId != null) return@then
         tick = 0
         val transport = getTransport()
-        repeatId = transport.scheduleRepeat(::onTick, TICK_SECONDS)
+        // One timeline tick is this many transport ticks, so it keeps time with the tempo.
+        repeatId = transport.scheduleRepeat(::onTick, "${transport.ppq / TICKS_PER_BEAT}i")
         transport.start()
     }
 }
@@ -229,16 +248,18 @@ private fun releaseSeconds(sound: InstrumentSound): Double {
 
 /** How long a note value like "8n" (an eighth note) lasts, in seconds. */
 private fun noteSeconds(duration: String) =
-    duration.removeSuffix("n").toDoubleOrNull()?.let { BEAT_SECONDS * 4 / it } ?: BEAT_SECONDS
+    duration.removeSuffix("n").toDoubleOrNull()?.let { beatSeconds() * 4 / it } ?: beatSeconds()
 
 /** Sets [chain]'s effects from [effects], skipping any that haven't changed. */
 private fun applyParams(chain: Chain, effects: List<EffectParams>) {
     val params = effects.map { it.amount to it.turn }
-    if (params == chain.applied) return
+    val tempoChanged = chain.appliedBpm != EditorState.bpm
+    if (params == chain.applied && !tempoChanged) return
     params.forEachIndexed { i, (amount, turn) ->
-        if (chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
+        if (tempoChanged || chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
     }
     chain.applied = params
+    chain.appliedBpm = EditorState.bpm
 }
 
 /** The chain for [key], built if there isn't one yet, with one more user. Null for no effects. */

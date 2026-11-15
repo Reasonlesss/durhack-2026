@@ -152,7 +152,7 @@ enum class EffectType(
         override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
             val fx = node.control.asDynamic()
             glide(fx.feedback, delayFeedback(amount))
-            glide(fx.delayTime, BEAT_SECONDS * delayBeats(turn))
+            glide(fx.delayTime, beatSeconds() * delayBeats(turn))
         }
     },
     DISTORTION(
@@ -218,7 +218,7 @@ enum class EffectType(
             val fx = node.control.asDynamic()
             glide(fx.depth, amount)
             // A 1/4 note is one beat, so 1/n notes come n/4 times a beat.
-            glide(fx.frequency, stutterDivision(turn) / 4.0 / BEAT_SECONDS)
+            glide(fx.frequency, stutterDivision(turn) / 4.0 / beatSeconds())
         }
     };
 

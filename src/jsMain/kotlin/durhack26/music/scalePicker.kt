@@ -88,6 +88,9 @@ fun renderScaleMenu(ctx: CanvasRenderingContext2D) {
     }
 }
 
+/** The left edge of the scale picker's button, so the tempo control can sit just left of it. */
+fun scalePickerLeft(ctx: CanvasRenderingContext2D) = buttonBounds(ctx).x
+
 fun isOverScalePicker(x: Double, y: Double): Boolean {
     val ctx = CanvasState.ctx ?: return false
     return buttonBounds(ctx).contains(x, y) || layoutMenu(ctx)?.first?.contains(x, y) == true

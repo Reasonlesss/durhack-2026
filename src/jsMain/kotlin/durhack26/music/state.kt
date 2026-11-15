@@ -74,6 +74,9 @@ object EditorState {
     /** True while the enabled universes are playing. */
     var playing = false
 
+    /** The tempo, in beats per minute. Change it with setBpm (audio.kt), which keeps playback in step. */
+    var bpm = 124  // house tempo
+
     /** True while the scale dropdown is open. */
     var scaleMenuOpen = false
 
