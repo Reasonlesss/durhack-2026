@@ -129,6 +129,9 @@ class Universe(var name: String, var enabled: Boolean = true) {
         cameraY = (cameraY + dy).coerceIn(minY, maxY)
     }
 
+    /** Scrolls straight to (x, y), within the same limits as [panBy]. */
+    fun scrollTo(x: Double, y: Double) = panBy(x - cameraX, y - cameraY)
+
     /** Every node in this universe, by id. */
     val nodes = mutableMapOf<Int, Node>()
 
