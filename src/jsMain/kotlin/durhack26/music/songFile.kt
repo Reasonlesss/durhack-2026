@@ -4,6 +4,7 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLAnchorElement
 import org.w3c.dom.HTMLInputElement
+import org.w3c.dom.asList
 import org.w3c.dom.url.URL
 import org.w3c.files.Blob
 import org.w3c.files.BlobPropertyBag
@@ -96,16 +97,25 @@ fun saveSong() {
         "suggestedName" to fileName,
         "types" to arrayOf(json("description" to "Song", "accept" to accept)),
     )
-    window.asDynamic().showSaveFilePicker(options)
-        .then { handle: dynamic ->
-            fileName = handle.name as String
-            handle.createWritable()
-        }
-        .then { writable: dynamic -> writable.write(text).then { writable.close() } }
-        .catch { error: dynamic ->
-            // Cancelling the dialog isn't a failure; anything else falls back to a download.
+    window.asDynamic().showSaveFilePicker(options).then(
+        { handle: dynamic -> writeTo(handle, text) },
+        { error: dynamic ->
+            // Cancelling the dialog isn't a failure. If the dialog couldn't open at all, download
+            // instead: this runs straight after the click, so the browser still allows it.
             if (error?.name != "AbortError") download(text)
-        }
+        },
+    )
+}
+
+/** Writes [text] to the file [handle] the save dialog chose, and remembers its name once it's saved. */
+private fun writeTo(handle: dynamic, text: String) {
+    val name = handle.name as String
+    handle.createWritable()
+        .then { writable: dynamic -> writable.write(text).then { writable.close() } }
+        .then(
+            { _: dynamic -> fileName = name },
+            { _: dynamic -> window.alert("Couldn't save \"$name\". Try saving it somewhere else.") },
+        )
 }
 
 /** Saves [text] by downloading it as [fileName]. */
@@ -125,20 +135,30 @@ fun openSong() {
     val input = document.createElement("input") as HTMLInputElement
     input.type = "file"
     input.accept = "$EXTENSION,$MIME_TYPE"
+    // Some browsers (iOS Safari) only report the chosen file for an input that's on the page.
+    input.style.display = "none"
+    document.body?.appendChild(input)
     input.onchange = {
+        input.remove()
         val file = input.files?.item(0)
         if (file != null) {
-            file.asDynamic().text().then { text: String ->
-                try {
-                    loadSong(text)
-                    fileName = file.name
-                } catch (e: Throwable) {
-                    val reason = (e as? SongFileError)?.message ?: "it couldn't be read"
-                    window.alert("Couldn't open \"${file.name}\": $reason.")
-                }
-            }
+            file.asDynamic().text().then(
+                { text: String ->
+                    try {
+                        loadSong(text)
+                        fileName = file.name
+                    } catch (e: Throwable) {
+                        val reason = (e as? SongFileError)?.message ?: "it couldn't be read"
+                        window.alert("Couldn't open \"${file.name}\": $reason.")
+                    }
+                },
+                { _: dynamic -> window.alert("Couldn't open \"${file.name}\": it couldn't be read.") },
+            )
         }
     }
+    // Cancelling the picker fires no event, so the input is also tidied away on the next Open.
+    document.querySelectorAll("input[data-song-picker]").asList().forEach { (it as HTMLInputElement).remove() }
+    input.setAttribute("data-song-picker", "")
     input.click()
 }
 
@@ -192,6 +212,8 @@ private fun resetEditing() {
     EditorState.previewLevel = null
     EditorState.scaleMenuOpen = false
     EditorState.instrumentMenuOpen = false
+    EditorState.editingShape = null
+    resetTapTempo()
 }
 
 /** A universe from a song file, and the (x, y) to scroll it to once the scale is set. */
@@ -203,15 +225,19 @@ private fun universeFromJson(json: dynamic): Pair<Universe, Pair<Double, Double>
     }
     for (entry in list(json, "instruments")) {
         val shape = enumField<InstrumentShape>(entry, "shape")
-        val type = enumField<InstrumentType>(entry, "type")
-        // Every note's shape has to be in the sidebar, or it couldn't be changed or removed.
-        universe.instrumentTypes.getOrPut(shape) { type }
+        // Every note's shape has to be in the sidebar, or it couldn't be changed or removed;
+        // and every note plays its shape's sidebar type, as the editor keeps it.
+        val type = universe.instrumentTypes.getOrPut(shape) { enumField<InstrumentType>(entry, "type") }
         universe.instruments += Instrument(type, shape, number(entry, "x"), number(entry, "y"))
     }
     for (entry in list(json, "edges")) {
         val from = universe.instruments.getOrNull(int(entry, "from"))
         val to = universe.instruments.getOrNull(int(entry, "to"))
         if (from == null || to == null || from === to) throw SongFileError("it has an edge between notes that don't exist")
+        // The editor allows one edge between two notes, one way round (see Universe.connect).
+        if (universe.edges.any { (it.from === from && it.to === to) || (it.from === to && it.to === from) }) {
+            throw SongFileError("it has two edges between the same notes")
+        }
         val segments = int(entry, "segments")
         if (segments !in SEGMENT_OPTIONS) throw SongFileError("it has an edge with an unknown delay")
         universe.edges += Edge(from, to, segments)

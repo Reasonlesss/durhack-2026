@@ -173,6 +173,9 @@ private val taps = mutableListOf<Double>()
 /** When the last tap happened, for the button's flash. */
 private var lastTapAt = Double.NEGATIVE_INFINITY
 
+/** Forgets any taps so far, e.g. when a song is opened with its own tempo. */
+fun resetTapTempo() = taps.clear()
+
 /**
  * Registers a tap. From the second tap on, the tempo becomes the average gap between the
  * last [MAX_TAPS] taps. A pause of [TAP_RESET_MS] starts counting again.

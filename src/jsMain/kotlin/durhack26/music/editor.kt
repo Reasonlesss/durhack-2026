@@ -53,7 +53,7 @@ private fun handlePointerDown(e: PointerEvent) {
         if (menuShown) return
         if (processScalePickerClick(e.offsetX, e.offsetY)) return
         if (processTempoClick(e.offsetX, e.offsetY)) return
-        if (processFileButtonsClick(e.offsetX, e.offsetY)) return
+        if (processFileButtonsPress(e.offsetX, e.offsetY)) return
         if (processPlayButtonClick(e.offsetX, e.offsetY)) return
         if (processTabClick(e.offsetX, e.offsetY)) return
         if (processToolbarClick(e.offsetX, e.offsetY)) {
@@ -150,6 +150,7 @@ fun onPointerLeave(e: PointerEvent) {
 }
 
 fun onPointerUp(e: PointerEvent) {
+    processFileButtonsRelease(e.offsetX, e.offsetY)
     EditorState.panning = false
     processToolbarDrop(e.offsetX, e.offsetY)
 
