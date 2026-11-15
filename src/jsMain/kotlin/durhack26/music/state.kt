@@ -22,6 +22,12 @@ object EditorState {
      */
     var scale = Scale.HAPPY
 
+    /**
+     * The key every scale starts from, as semitones above C (0 = C, 9 = A). An advanced
+     * option under the moods: "Sad" in A is A minor. See levels.kt.
+     */
+    var key = 0
+
     /** All open universes, in tab order. */
     val universes = mutableListOf(
         Universe("Universe 1"),
@@ -73,6 +79,9 @@ object EditorState {
 
     /** True while the enabled universes are playing. */
     var playing = false
+
+    /** The tempo, in beats per minute. Change it with setBpm (audio.kt), which keeps playback in step. */
+    var bpm = 124  // house tempo
 
     /** True while the scale dropdown is open. */
     var scaleMenuOpen = false

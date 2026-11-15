@@ -17,6 +17,7 @@ fun render(ctx: CanvasRenderingContext2D) {
     renderUniverseTabs(ctx)
     renderPlayButton(ctx)
     renderScalePicker(ctx)
+    renderTempo(ctx)
     renderToolbar(ctx)
     renderInstrumentMenu(ctx)
     renderScaleMenu(ctx)
@@ -40,9 +41,8 @@ fun onPointerDown(e: PointerEvent) {
 private fun handlePointerDown(e: PointerEvent) {
     if (e.button.toInt() == 0) {
         if (EditorState.scaleMenuOpen) {
-            // Picks a scale if one was clicked; any other click just closes the dropdown.
-            processScalePickerClick(e.offsetX, e.offsetY)
-            EditorState.scaleMenuOpen = false
+            // Picks a scale or key if one was clicked; any click outside just closes the dropdown.
+            if (!processScalePickerClick(e.offsetX, e.offsetY)) EditorState.scaleMenuOpen = false
             return
         }
         if (processInstrumentMenuClick(e.offsetX, e.offsetY)) return
@@ -51,6 +51,7 @@ private fun handlePointerDown(e: PointerEvent) {
         // A click outside the open dropdown only closes it.
         if (menuShown) return
         if (processScalePickerClick(e.offsetX, e.offsetY)) return
+        if (processTempoClick(e.offsetX, e.offsetY)) return
         if (processPlayButtonClick(e.offsetX, e.offsetY)) return
         if (processTabClick(e.offsetX, e.offsetY)) return
         if (processToolbarClick(e.offsetX, e.offsetY)) {
@@ -173,9 +174,10 @@ fun onPointerUp(e: PointerEvent) {
     EditorState.selectedUniverse.markChanged()
 }
 
-/** Whether screen point (x, y) is over the sidebar, a dropdown, the play button or the scale picker. */
+/** Whether screen point (x, y) is over the sidebar, a dropdown, the play button, the scale picker or the tempo control. */
 private fun isOverUi(x: Double, y: Double) =
-    isOverToolbar(x, y) || isOverInstrumentMenu(x, y) || isOverPlayButton(x, y) || isOverScalePicker(x, y)
+    isOverToolbar(x, y) || isOverInstrumentMenu(x, y) || isOverPlayButton(x, y) || isOverScalePicker(x, y) ||
+        isOverTempo(x, y)
 
 fun onWheel(e: WheelEvent) {
     // Line-based wheels (some mice) report lines rather than pixels.
@@ -184,6 +186,9 @@ fun onWheel(e: WheelEvent) {
     var dy = e.deltaY * unit
     // Shift + wheel scrolls sideways on mice without horizontal scrolling.
     if (e.shiftKey && dx == 0.0) { dx = dy; dy = 0.0 }
+    // Over the tempo, scrolling up or down changes it instead. Not sideways scrolling, and
+    // not ctrl + wheel, which is how trackpads report a pinch.
+    if (!e.ctrlKey && dy != 0.0 && processTempoWheel(e.offsetX, e.offsetY, dy)) return
     EditorState.selectedUniverse.panBy(dx, dy)
 }
 
@@ -193,6 +198,8 @@ fun onKeyDown(e: KeyboardEvent) {
         e.preventDefault()
         togglePlayback()
     }
+    // T taps the tempo.
+    if ((e.key == "t" || e.key == "T") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) tapTempo()
 }
 
 fun onKeyUp(e: KeyboardEvent) {

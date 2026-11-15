@@ -26,8 +26,18 @@ external class Context(options: dynamic)
 external fun getTransport(): Transport
 
 external interface Transport {
-    /** Calls [callback] every [interval] seconds with the exact audio time to play at. */
-    fun scheduleRepeat(callback: (time: Double) -> Unit, interval: Double): Int
+    /**
+     * Calls [callback] every [interval] with the exact audio time to play at. The interval is
+     * Tone.js time: seconds, or e.g. "8i" for 8 transport ticks, which follows [bpm].
+     */
+    fun scheduleRepeat(callback: (time: Double) -> Unit, interval: String): Int
+
+    /** The tempo, in beats per minute. Set `bpm.value`; playback follows straight away. */
+    val bpm: dynamic
+
+    /** Transport ticks per beat (Tone.js's default is 192). */
+    @JsName("PPQ")
+    val ppq: Int
     fun clear(id: Int)
     fun start()
     fun stop()

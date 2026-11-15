@@ -9,6 +9,7 @@ import durhack26.music.tone.now
 import durhack26.music.tone.setContext
 import durhack26.music.tone.start
 import kotlinx.browser.window
+import kotlin.math.roundToInt
 
 /*
  * Plays every enabled universe's timeline with Tone.js.
@@ -29,9 +30,23 @@ import kotlinx.browser.window
  * What each instrument and effect sounds like is defined on InstrumentType and EffectType.
  */
 
-const val BPM = 124.0  // house tempo
-const val BEAT_SECONDS = 60.0 / BPM
-private const val TICK_SECONDS = BEAT_SECONDS / TICKS_PER_BEAT
+/** The slowest and fastest tempos allowed, in BPM. */
+const val MIN_BPM = 60
+const val MAX_BPM = 200
+
+/** How long a beat lasts at the current tempo, in seconds. */
+fun beatSeconds() = 60.0 / EditorState.bpm
+
+/**
+ * Sets the tempo, rounded to a whole BPM and kept within [MIN_BPM]..[MAX_BPM]. Playback
+ * follows straight away: the timeline is clocked in beats, not seconds.
+ */
+fun setBpm(bpm: Double) {
+    EditorState.bpm = bpm.roundToInt().coerceIn(MIN_BPM, MAX_BPM)
+    getTransport().bpm.value = EditorState.bpm
+    // Effects timed in beats change now, rather than when a note next plays through them.
+    chains.values.forEach(::retime)
+}
 
 /**
  * The sample rate everything runs at. Browsers otherwise use the output device's, which
@@ -60,6 +75,7 @@ fun setupAudio() {
     options.lookAhead = LOOK_AHEAD_SECONDS
     // Closes the context Tone.js makes as soon as it's loaded, at the device's sample rate.
     setContext(Context(options), disposeOld = true)
+    getTransport().bpm.value = EditorState.bpm
 }
 
 /** How long a note is allowed to ring after it ends, in seconds, when its synth doesn't say. */
@@ -69,10 +85,11 @@ private const val RELEASE_SECONDS = 1.6
 private const val MAX_POLYPHONY = 8
 
 /**
- * How long a pool or chain is kept after it last played, in seconds. Longer than the longest
- * loop, so one note per loop doesn't rebuild it every time; that also lets tails ring out.
+ * How long a pool or chain is kept after it last played, in seconds: longer than the longest
+ * loop at the current tempo, so one note per loop doesn't rebuild it every time; that also
+ * lets tails ring out.
  */
-private val IDLE_SECONDS = TIMELINE_BEATS * BEAT_SECONDS + 5
+private fun idleSeconds() = TIMELINE_BEATS * beatSeconds() + 5
 
 /** The effects a note is inside, innermost first, each with the type it had when the chain was built. */
 private typealias ChainKey = List<Pair<Effect, EffectType>>
@@ -147,7 +164,8 @@ private fun startPlayback() {
         if (!EditorState.playing || repeatId != null) return@then
         tick = 0
         val transport = getTransport()
-        repeatId = transport.scheduleRepeat(::onTick, TICK_SECONDS)
+        // One timeline tick is this many transport ticks, so it keeps time with the tempo.
+        repeatId = transport.scheduleRepeat(::onTick, "${transport.ppq / TICKS_PER_BEAT}i")
         transport.start()
     }
 }
@@ -229,7 +247,7 @@ private fun releaseSeconds(sound: InstrumentSound): Double {
 
 /** How long a note value like "8n" (an eighth note) lasts, in seconds. */
 private fun noteSeconds(duration: String) =
-    duration.removeSuffix("n").toDoubleOrNull()?.let { BEAT_SECONDS * 4 / it } ?: BEAT_SECONDS
+    duration.removeSuffix("n").toDoubleOrNull()?.let { beatSeconds() * 4 / it } ?: beatSeconds()
 
 /** Sets [chain]'s effects from [effects], skipping any that haven't changed. */
 private fun applyParams(chain: Chain, effects: List<EffectParams>) {
@@ -239,6 +257,14 @@ private fun applyParams(chain: Chain, effects: List<EffectParams>) {
         if (chain.applied.getOrNull(i) != params[i]) chain.key[i].second.applyParams(chain.nodes[i], amount, turn)
     }
     chain.applied = params
+}
+
+/** Re-applies [chain]'s tempo-dependent effects (delay, stutter) after a tempo change. */
+private fun retime(chain: Chain) {
+    chain.applied.forEachIndexed { i, (amount, turn) ->
+        val type = chain.key[i].second
+        if (type.tempoDependent) type.applyParams(chain.nodes[i], amount, turn)
+    }
 }
 
 /** The chain for [key], built if there isn't one yet, with one more user. Null for no effects. */
@@ -255,9 +281,10 @@ private fun acquire(key: ChainKey): Chain? {
     return chain
 }
 
-/** Disposes pools that haven't played for [IDLE_SECONDS], and any chain left with no pools. */
+/** Disposes pools that haven't played for [idleSeconds], and any chain left with no pools. */
 private fun disposeIdle(time: Double) {
-    val idle = pools.filterValues { time - it.lastUsed > IDLE_SECONDS }
+    val idleSeconds = idleSeconds()
+    val idle = pools.filterValues { time - it.lastUsed > idleSeconds }
     for ((key, pool) in idle) {
         pools.remove(key)
         pool.dispose()

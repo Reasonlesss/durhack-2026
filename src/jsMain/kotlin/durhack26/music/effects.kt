@@ -130,6 +130,8 @@ enum class EffectType(
     val rotationControl: EffectControl?,
     /** What making it roomier does, or null if it has no scale handle. Takes the amount, 0..1. */
     val scaleControl: EffectControl?,
+    /** Whether [applyParams] depends on the tempo, so it has to run again when that changes. */
+    val tempoDependent: Boolean = false,
 ) {
     REVERB(
         "Reverb", SKY_500, EffectShape.Circle,
@@ -147,12 +149,14 @@ enum class EffectType(
         "Delay", EMERALD_500, EffectShape.SQUARE,
         rotationControl = EffectControl("Echo gap") { "${delayBeats(it).fixed(2)} beats" },
         scaleControl = EffectControl("Repeats") { percent(delayFeedback(it)) },
+        tempoDependent = true,
     ) {
-        override fun createNode() = EffectNode(FeedbackDelay(js("({ delayTime: 0.25, feedback: 0.4 })")))
+        // The longest echo is 1 beat, which at MIN_BPM (60) is 1 s: room for 2.
+        override fun createNode() = EffectNode(FeedbackDelay(js("({ delayTime: 0.25, feedback: 0.4, maxDelay: 2 })")))
         override fun applyParams(node: EffectNode, amount: Double, turn: Double) {
             val fx = node.control.asDynamic()
             glide(fx.feedback, delayFeedback(amount))
-            glide(fx.delayTime, BEAT_SECONDS * delayBeats(turn))
+            glide(fx.delayTime, beatSeconds() * delayBeats(turn))
         }
     },
     DISTORTION(
@@ -209,6 +213,7 @@ enum class EffectType(
         "Stutter", PINK_500, EffectShape.STAR,
         rotationControl = EffectControl("Speed") { "1/${stutterDivision(it)}" },
         scaleControl = EffectControl("Depth") { percent(it) },
+        tempoDependent = true,
     ) {
         // Chops the sound on and off in time with the beat.
         override fun createNode() = EffectNode(Tremolo(js("({ frequency: 4, type: 'square', depth: 1, spread: 0 })")).also {
@@ -218,7 +223,7 @@ enum class EffectType(
             val fx = node.control.asDynamic()
             glide(fx.depth, amount)
             // A 1/4 note is one beat, so 1/n notes come n/4 times a beat.
-            glide(fx.frequency, stutterDivision(turn) / 4.0 / BEAT_SECONDS)
+            glide(fx.frequency, stutterDivision(turn) / 4.0 / beatSeconds())
         }
     };
 
