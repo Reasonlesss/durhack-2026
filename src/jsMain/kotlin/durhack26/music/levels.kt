@@ -5,14 +5,15 @@ import kotlin.math.roundToInt
 
 /*
  * The y axis is pitch. It's split into levels, LEVEL_HEIGHT apart, one per note of the
- * chosen scale (EditorState.scale) from C3 at the bottom to C6 at the top. Higher on
- * screen = higher note. Scales with fewer notes per octave have fewer levels.
+ * chosen scale (EditorState.scale) in the chosen key (EditorState.key), from the key's
+ * note in octave 3 at the bottom to the same note in octave 6 at the top: C3 to C6 in C.
+ * Higher on screen = higher note. Scales with fewer notes per octave have fewer levels.
  *
  * Notes can sit anywhere; when they play, their y is rounded to the nearest level.
  * Melodic instruments play that level's note. Drums ignore the scale and just cycle
  * through the kit, one drum per level (see DrumSound).
  *
- * Level 0 is the bottom (C3) and sits at world y = 0; levels go up (negative y) from there.
+ * Level 0 is the bottom (e.g. C3) and sits at world y = 0; levels go up (negative y) from there.
  */
 
 const val LEVEL_HEIGHT = 48.0
@@ -21,8 +22,14 @@ private const val OCTAVES = 3
 
 private val NOTE_NAMES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
+/** How many keys there are: one per semitone, C to B. */
+const val KEY_COUNT = 12
+
+/** The name of [key] (semitones above C), e.g. "F#". */
+fun keyName(key: Int) = NOTE_NAMES[key]
+
 /**
- * A scale, as the semitones above C of each note in one octave. This is for beginners, so
+ * A scale, as the semitones above the key's note of each note in one octave. This is for beginners, so
  * each is labelled by the mood it gives rather than its music-theory name (in the comment).
  */
 enum class Scale(val label: String, val semitones: List<Int>) {
@@ -59,7 +66,7 @@ fun isLevel(level: Int) = level in 0 until scale.levelCount
 private fun midiOf(level: Int, octaveShift: Int): Int {
     val perOctave = scale.semitones.size
     val octave = LOWEST_OCTAVE + level / perOctave + octaveShift
-    return 12 * (octave + 1) + scale.semitones[level % perOctave]
+    return 12 * (octave + 1) + EditorState.key + scale.semitones[level % perOctave]
 }
 
 /** E.g. "E4" or "F#3". [octaveShift] moves it by whole octaves. */

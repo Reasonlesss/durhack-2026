@@ -41,9 +41,8 @@ fun onPointerDown(e: PointerEvent) {
 private fun handlePointerDown(e: PointerEvent) {
     if (e.button.toInt() == 0) {
         if (EditorState.scaleMenuOpen) {
-            // Picks a scale if one was clicked; any other click just closes the dropdown.
-            processScalePickerClick(e.offsetX, e.offsetY)
-            EditorState.scaleMenuOpen = false
+            // Picks a scale or key if one was clicked; any click outside just closes the dropdown.
+            if (!processScalePickerClick(e.offsetX, e.offsetY)) EditorState.scaleMenuOpen = false
             return
         }
         if (processInstrumentMenuClick(e.offsetX, e.offsetY)) return

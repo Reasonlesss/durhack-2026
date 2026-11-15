@@ -22,6 +22,12 @@ object EditorState {
      */
     var scale = Scale.HAPPY
 
+    /**
+     * The key every scale starts from, as semitones above C (0 = C, 9 = A). An advanced
+     * option under the moods: "Sad" in A is A minor. See levels.kt.
+     */
+    var key = 0
+
     /** All open universes, in tab order. */
     val universes = mutableListOf(
         Universe("Universe 1"),
